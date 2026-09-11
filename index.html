@@ -792,7 +792,7 @@
   hubGlow.position.y = 0.04;
   scene.add(hubGlow);
 
-  const coreLabel = makeLabel("CORE", 0x2fbf8f);
+  const coreLabel = makeLabel("ORCHESTRATOR", 0x2fbf8f);
   coreLabel.position.set(0, 17.5, 0);
   core.add(coreLabel);
 
@@ -808,12 +808,12 @@
   /* ================= AGENT SITES (ring) ================= */
   const RING = 47;
   const SITES = [
-    {name:"HOME",       accent:0x4fb8e0, build:buildHouse},
-    {name:"PLAYGROUND", accent:0xff8aa5, build:buildPlayground},
-    {name:"HOSPITAL",   accent:0xe15a5a, build:buildHospital},
-    {name:"SCHOOL",     accent:0xf2b143, build:buildSchool},
-    {name:"FACTORY",    accent:0x8fa3b8, build:buildFactory},
-    {name:"MARKET",     accent:0x3ddc97, build:buildMarket},
+    {name:"frontend-ux-ui", accent:0x4fb8e0, build:buildHouse},
+    {name:"tester",         accent:0xff8aa5, build:buildPlayground, patrol:true},
+    {name:"auditor",        accent:0xe15a5a, build:buildHospital},
+    {name:"chat",           accent:0xf2b143, build:buildSchool},
+    {name:"backend-dotnet", accent:0x8fa3b8, build:buildFactory},
+    {name:"sql",            accent:0x3ddc97, build:buildMarket},
   ];
 
   function buildHouse(site){
@@ -965,7 +965,7 @@
 
     const info = s.build(site);
 
-    const label = makeLabel(s.name, s.accent);
+    const label = makeLabel(s.name.toUpperCase(), s.accent);
     label.position.set(0, info.top+1.3, 0);
     site.add(label);
 
@@ -975,9 +975,9 @@
     replaceRobotMesh(rb, "models/chibi-robot.json", 2.7);
     robotsList.push({dot:s.accent, name:s.name});
 
-    /* the playground's robot patrols in a loop around the play equipment
+    /* the tester's robot patrols in a loop around the play equipment
        instead of standing still — a first try at "agents that move" */
-    if(s.name === "PLAYGROUND"){
+    if(s.patrol){
       rb.patrol = { radius: 5.4, speed: 0.28, phase: rng()*Math.PI*2 };
     }
 
@@ -1046,10 +1046,16 @@
     batches.forEach(b=>{ b.instanceMatrix.needsUpdate = true; });
   })();
 
-  /* legend under the caption, driven by the same data */
+  /* legend under the caption, driven by the same data — agent slugs may be
+     hyphenated (e.g. "backend-dotnet", "frontend-ux-ui"), so title-case each
+     hyphen-separated word rather than assuming a single token; short (<=3
+     char) words are treated as acronyms so they render as e.g. "SQL"/"UX" */
+  function titleCaseSlug(slug){
+    return slug.split("-").map(w => w.length<=3 ? w.toUpperCase() : w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(" ");
+  }
   const legendEl = document.getElementById("legend");
-  legendEl.innerHTML = `<li><span class="dot" style="background:${toCss(0x2fbf8f)}"></span>Core</li>` +
-    robotsList.map(r=>`<li><span class="dot" style="background:${toCss(r.dot)}"></span>${r.name.charAt(0)+r.name.slice(1).toLowerCase()}</li>`).join("");
+  legendEl.innerHTML = `<li><span class="dot" style="background:${toCss(0x2fbf8f)}"></span>Orchestrator</li>` +
+    robotsList.map(r=>`<li><span class="dot" style="background:${toCss(r.dot)}"></span>${titleCaseSlug(r.name)}</li>`).join("");
 
   /* ---------- core's companion drone ---------- */
   const coreRobot = makeRobot(0x2fbf8f, 0, "hero");
