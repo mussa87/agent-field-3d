@@ -938,7 +938,7 @@
   const RING = 47;
   const SITES = [
     {name:"frontend-ux-ui", accent:0x4fb8e0, build:buildHouse},
-    {name:"tester",         accent:0xff8aa5, build:buildPlayground, patrol:true},
+    {name:"tester",         accent:0xff8aa5, build:buildPlayground},
     {name:"auditor",        accent:0xe15a5a, build:buildHospital},
     {name:"chat",           accent:0xf2b143, build:buildSchool},
     {name:"backend-dotnet", accent:0x8fa3b8, build:buildFactory},
@@ -1119,16 +1119,16 @@
     robotsList.push({dot:s.accent, name:s.name});
     robotBySiteIndex.push(rb);
 
-    /* every site's robot now carries a patrol config (not just the one
-       "tester" building had before) — whether it's actually USED each
-       frame is decided live from real backend activity, in
-       applyBusyToScene() near the end of this script. `s.patrol` (still
-       true only for "tester") is kept only as the last-resort default used
-       when the live backend can't be reached at all this session — see
-       applyBusyToScene() for exactly where that fallback applies. */
+    /* every site's robot carries a patrol config — whether it's actually
+       USED each frame is decided live from real backend activity alone, in
+       applyBusyToScene() near the end of this script (there is no static
+       per-site "always busy" flag any more; "tester" used to have one for
+       early visual/design checking, but it's been removed so every ring
+       agent — tester included — starts idle here and only patrols once the
+       live backend says that agent type is actually busy). */
     rb.homePos = {x:0.9, y:0, z:info.front};
     rb.patrolCfg = { radius: Math.min(5.4, info.front-0.6), speed: 0.28, phase: rng()*Math.PI*2 };
-    rb.patrolActive = !!s.patrol;
+    rb.patrolActive = false; /* overridden live once backend data connects — see applyBusyToScene() */
 
     /* stepping-stone spoke path from the plaza edge to this site's entrance —
        a gentle bow rather than a straight radial line, so it reads as a
@@ -1337,11 +1337,12 @@
       const halo = siteHaloBySiteIndex[i];
       let busy;
       if(!backendReachable){
-        /* backend never reachable this session — the only signal left is
-           the original static per-site flag (true only for "tester"), so
-           the scene doesn't look entirely inert with zero information
-           available; this is its one remaining use. */
-        busy = !!s.patrol;
+        /* backend never reachable (or no longer reachable) this session —
+           there is no real activity data to show, so every ring agent
+           (tester included — no more static "always patrol" exception for
+           it) renders idle/still with no halo, exactly like the
+           orchestrator core below does in this same situation. */
+        busy = false;
       } else {
         const ts = lastPayload.agentTypes.find(t=>t.agentType===s.name);
         const agentsOfType = lastPayload.agents.filter(a=>a.agentType===s.name);
