@@ -1,0 +1,1202 @@
+<title>Agent Field 3D</title>
+<style>
+  :root{
+    --sky:#8ec9ee;
+    --panel:#f4f7f0;
+    --panel-line:#d9e3d2;
+    --ink:#2c3a2a;
+    --ink-dim:#5d6f5c;
+    --mint:#2fbf8f;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{
+    background:var(--panel);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:0 0 48px;
+  }
+  .stage{
+    position:relative;
+    width:100%;
+    aspect-ratio:16/9;
+    overflow:hidden;
+    background:var(--sky);
+    touch-action:none;
+    cursor:grab;
+  }
+  .stage.dragging{cursor:grabbing;}
+  .stage canvas{display:block;width:100%;height:100%;}
+  .hint{
+    position:absolute;
+    left:16px;
+    bottom:14px;
+    font-size:12px;
+    letter-spacing:.02em;
+    color:#233324;
+    background:rgba(255,255,255,0.78);
+    backdrop-filter:blur(3px);
+    padding:7px 12px;
+    border-radius:20px;
+    display:flex;
+    align-items:center;
+    gap:6px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.08);
+    pointer-events:none;
+  }
+  .loading{
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:13px;
+    color:#3f5240;
+    background:var(--sky);
+  }
+  .resetbtn{
+    position:absolute;
+    right:14px;
+    top:14px;
+    font-size:12px;
+    font-weight:600;
+    color:#233324;
+    background:rgba(255,255,255,0.85);
+    border:1px solid rgba(255,255,255,0.6);
+    border-radius:20px;
+    padding:7px 13px;
+    cursor:pointer;
+    box-shadow:0 2px 10px rgba(0,0,0,0.08);
+  }
+  .resetbtn:hover{background:#ffffff;}
+  .resetbtn:focus-visible{outline:2px solid var(--mint);outline-offset:2px;}
+  .caption{
+    max-width:920px;
+    margin:26px auto 0;
+    padding:0 20px;
+  }
+  .eyebrow{
+    font-size:11px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--mint);
+    font-weight:700;
+    margin:0 0 10px;
+  }
+  h1{
+    font-family:'Fraunces',Georgia,serif;
+    font-weight:600;
+    font-size:26px;
+    margin:0 0 10px;
+    color:#233324;
+    letter-spacing:.01em;
+    text-wrap:balance;
+  }
+  .caption p{
+    font-size:14.5px;
+    line-height:1.65;
+    color:var(--ink-dim);
+    margin:0 0 14px;
+    max-width:640px;
+  }
+  .legend{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 14px;
+    padding:0;
+    margin:0;
+    list-style:none;
+  }
+  .legend li{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    font-size:12px;
+    color:var(--ink-dim);
+  }
+  .legend .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+  .modelstatus{
+    position:absolute;
+    left:16px;
+    top:14px;
+    font-size:11px;
+    letter-spacing:.02em;
+    color:#233324;
+    background:rgba(255,255,255,0.85);
+    padding:6px 11px;
+    border-radius:14px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.08);
+    pointer-events:none;
+    max-width:70%;
+  }
+</style>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap">
+
+<div class="stage" id="stage">
+  <div class="loading" id="loading">loading scene…</div>
+  <button class="resetbtn" id="resetbtn" type="button">reset view</button>
+  <div class="modelstatus" id="modelstatus" hidden></div>
+  <div class="hint" id="hint">🖱️ drag to orbit · right-drag to pan · scroll to zoom</div>
+</div>
+
+<div class="caption">
+  <p class="eyebrow">Interactive asset · agent field, in 3D</p>
+  <h1>One core, six agents, each with its own unit stationed outside</h1>
+  <p>A bigger low-poly campus: the command house at the center, six agent buildings ringed around it on their own paths, and a robot stationed by each — every one a live WebGL scene you can orbit and zoom.</p>
+  <ul class="legend" id="legend"></ul>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+(function(){
+  const stage = document.getElementById("stage");
+  const loadingEl = document.getElementById("loading");
+  const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if(typeof THREE === "undefined" || typeof THREE.OrbitControls === "undefined"){
+    loadingEl.textContent = "3D library failed to load.";
+    return;
+  }
+
+  function mulberry32(a){
+    return function(){
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rng = mulberry32(77);
+  function toCss(hexNum){ return "#" + hexNum.toString(16).padStart(6,"0"); }
+
+  /* ---------- terrain height field, shared by mesh + object placement ---------- */
+  const FLAT_R = 58, FLAT_BLEND = 20;
+  function heightAt(x,z){
+    let h = Math.sin(x*0.1)*1.1 + Math.cos(z*0.09)*1.1 + Math.sin((x+z)*0.05)*1.6 + Math.sin(x*0.035)*Math.cos(z*0.035)*2.3;
+    const d = Math.sqrt(x*x+z*z);
+    const t = Math.min(1, Math.max(0, (d-FLAT_R)/FLAT_BLEND));
+    return h*t;
+  }
+
+  /* ---------- renderer / scene / camera ---------- */
+  const scene = new THREE.Scene();
+  const skyColor = 0x8ec9ee;
+  scene.background = new THREE.Color(skyColor);
+  scene.fog = new THREE.Fog(skyColor, 175, 400);
+
+  const camera = new THREE.PerspectiveCamera(45, 16/9, 0.1, 900);
+  const target = new THREE.Vector3(0, 7, 0);
+  camera.position.set(-78, 88, 132);
+
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.domElement.setAttribute("aria-label", "3D scene: a ring of agent buildings around a central command house, each with a robot stationed outside. Drag to orbit, scroll to zoom.");
+  renderer.domElement.setAttribute("role", "img");
+  stage.insertBefore(renderer.domElement, loadingEl);
+
+  function sizeRenderer(){
+    const w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+    renderer.setSize(w, h, false);
+    camera.aspect = w/h;
+    camera.updateProjectionMatrix();
+  }
+  sizeRenderer();
+  window.addEventListener("resize", sizeRenderer);
+  if(window.ResizeObserver){ new ResizeObserver(sizeRenderer).observe(stage); }
+
+  /* ---------- controls ---------- */
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.copy(target);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.enablePan = true;
+  controls.screenSpacePanning = false;
+  controls.panSpeed = 0.8;
+  controls.minDistance = 16;
+  controls.maxDistance = 280;
+  controls.minPolarAngle = 0.15;
+  controls.maxPolarAngle = 1.45;
+  controls.autoRotate = !reduceMotion;
+  controls.autoRotateSpeed = 0.4;
+  controls.enableZoom = false; /* replaced below with a zoom-to-cursor version */
+  controls.update();
+  controls.saveState();
+
+  controls.addEventListener("start", ()=>{ controls.autoRotate = false; stage.classList.add("dragging"); });
+  controls.addEventListener("end", ()=>{ stage.classList.remove("dragging"); });
+
+  /* ---------- zoom that follows the cursor, instead of always dollying
+     toward the fixed orbit target ---------- */
+  (function(){
+    const raycaster = new THREE.Raycaster();
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+    const ndc = new THREE.Vector2();
+    function pointerWorldPoint(clientX, clientY){
+      const rect = renderer.domElement.getBoundingClientRect();
+      ndc.set(
+        ((clientX-rect.left)/rect.width)*2-1,
+        -((clientY-rect.top)/rect.height)*2+1
+      );
+      raycaster.setFromCamera(ndc, camera);
+      /* `terrain` is defined further down the script, but this callback only
+         ever runs later, on an actual wheel event, by which point it exists */
+      if(typeof terrain !== "undefined"){
+        const hit = raycaster.intersectObject(terrain, false)[0];
+        if(hit) return hit.point;
+      }
+      const p = new THREE.Vector3();
+      if(raycaster.ray.intersectPlane(groundPlane, p)) return p;
+      return null;
+    }
+    renderer.domElement.addEventListener("wheel", (e)=>{
+      e.preventDefault();
+      controls.autoRotate = false;
+      const point = pointerWorldPoint(e.clientX, e.clientY);
+      if(!point) return;
+      const oldDist = camera.position.distanceTo(controls.target);
+      let newDist = oldDist * Math.exp(e.deltaY * 0.0016);
+      newDist = Math.min(controls.maxDistance, Math.max(controls.minDistance, newDist));
+      const factor = newDist / oldDist;
+      /* scale both the camera and the orbit target toward the point under
+         the cursor by the same factor — the point stays put on screen and
+         the distance-to-target changes by exactly the intended zoom amount,
+         so OrbitControls' own state stays consistent on its next update().
+         (compute both offsets from the ORIGINAL position/target before
+         mutating either — copy() on camera.position would otherwise be
+         clobbered before target's offset gets a chance to read it) */
+      const camOffset = camera.position.clone().sub(point).multiplyScalar(factor);
+      const targetOffset = controls.target.clone().sub(point).multiplyScalar(factor);
+      camera.position.copy(point).add(camOffset);
+      controls.target.copy(point).add(targetOffset);
+      controls.update();
+    }, {passive:false});
+  })();
+
+  document.getElementById("resetbtn").addEventListener("click", ()=>{
+    controls.reset();
+    controls.autoRotate = !reduceMotion;
+  });
+
+  /* ---------- lighting ---------- */
+  /* a stronger sun / dimmer ambient fill than before, so the directional
+     light actually reads as the dominant brightness source (deeper shadow
+     contrast) instead of being washed out by flat ambient fill */
+  const hemiBaseIntensity = 0.58, sunBaseIntensity = 1.65;
+  const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x4f7a3a, hemiBaseIntensity);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xfff3d6, sunBaseIntensity);
+  sun.position.set(95, 120, 55);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1536,1536);
+  sun.shadow.camera.left = -125; sun.shadow.camera.right = 125;
+  sun.shadow.camera.top = 125; sun.shadow.camera.bottom = -125;
+  sun.shadow.camera.far = 340;
+  sun.shadow.bias = -0.0015;
+  scene.add(sun);
+
+  /* ---------- optional real 3D robot models (glTF), swapped in over the
+     procedural placeholder once each finishes loading, so the scene never
+     shows an empty gap while the (few-MB) files come in ---------- */
+  const modelStatusEl = document.getElementById("modelstatus");
+  let modelsExpected = 0, modelsSettled = 0;
+  function setModelStatus(text){
+    if(!modelStatusEl) return;
+    modelStatusEl.textContent = text;
+    modelStatusEl.hidden = !text;
+  }
+  function noteModelSettled(ok, url, detail){
+    modelsSettled++;
+    if(!ok) console.error("robot model failed:", url, detail);
+  }
+  const gltfLoader = (typeof THREE.GLTFLoader !== "undefined") ? new THREE.GLTFLoader() : null;
+  if(!gltfLoader){
+    setModelStatus("Real robot models unavailable: GLTFLoader did not load — showing built-in robots.");
+  }
+  function replaceRobotMesh(rb, url, targetHeight){
+    if(!gltfLoader) return;
+    modelsExpected++;
+    setModelStatus("Loading real robot model… (" + url + ")");
+    /* the model ships as a same-origin JSON file holding the original .glb
+       bytes as base64 (the artifact host only serves standard web media
+       types, and model/gltf-binary isn't one) — fetch it, decode back to
+       an ArrayBuffer, and hand that to GLTFLoader.parse() same as a normal
+       binary glTF load */
+    fetch(url)
+      .then(r=>{
+        if(!r.ok) throw new Error("HTTP " + r.status + " fetching " + url);
+        return r.text();
+      })
+      .then(text=>{
+        let parsed;
+        try{ parsed = JSON.parse(text); }
+        catch(e){ throw new Error("model JSON for " + url + " did not parse: " + e.message); }
+        const glb = parsed && parsed.glb;
+        if(!glb) throw new Error("model JSON for " + url + " had no 'glb' field");
+        let binStr;
+        try{ binStr = atob(glb); }
+        catch(e){ throw new Error("base64 decode failed for " + url + ": " + e.message); }
+        const bytes = new Uint8Array(binStr.length);
+        for(let i=0;i<binStr.length;i++) bytes[i] = binStr.charCodeAt(i);
+        gltfLoader.parse(bytes.buffer, "", (gltf)=>{
+          try{
+            onRobotModelLoaded(rb, gltf, targetHeight);
+            noteModelSettled(true, url);
+            setModelStatus("");
+          }catch(e){
+            noteModelSettled(false, url, e);
+            setModelStatus("Robot model placed but failed while applying (" + url + "): " + e.message);
+          }
+        }, (err)=>{
+          noteModelSettled(false, url, err);
+          setModelStatus("Robot model failed to parse (" + url + "): " + (err && err.message ? err.message : err));
+        });
+      })
+      .catch(err=>{
+        noteModelSettled(false, url, err);
+        setModelStatus("Robot model failed to load (" + url + "): " + (err && err.message ? err.message : err));
+      });
+  }
+  function onRobotModelLoaded(rb, gltf, targetHeight){
+      const obj = gltf.scene;
+      if(!obj) throw new Error("glTF had no .scene");
+      obj.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = new THREE.Vector3(); box.getSize(size);
+      const scale = targetHeight / (size.y || 1);
+      obj.scale.setScalar(scale);
+      obj.updateMatrixWorld(true);
+      const box2 = new THREE.Box3().setFromObject(obj);
+      const center2 = new THREE.Vector3(); box2.getCenter(center2);
+      obj.position.x -= center2.x;
+      obj.position.z -= center2.z;
+      obj.position.y -= box2.min.y;
+      obj.traverse(o=>{
+        if(o.isMesh){
+          o.castShadow = true; o.receiveShadow = false;
+          if(o.material) o.material.side = THREE.DoubleSide;
+        }
+      });
+      while(rb.bot.children.length) rb.bot.remove(rb.bot.children[0]);
+      rb.bot.add(obj);
+      rb.isGLTF = true;
+  }
+
+  function makeGlowTexture(){
+    const c = document.createElement("canvas"); c.width=c.height=256;
+    const ctx = c.getContext("2d");
+    const g = ctx.createRadialGradient(128,128,0,128,128,128);
+    g.addColorStop(0,"rgba(255,244,200,0.9)");
+    g.addColorStop(0.4,"rgba(255,220,140,0.4)");
+    g.addColorStop(1,"rgba(255,220,140,0)");
+    ctx.fillStyle = g; ctx.fillRect(0,0,256,256);
+    return new THREE.CanvasTexture(c);
+  }
+  /* layered glow: a big soft halo behind a tighter bright core, both additive
+     so they read as light rather than a flat translucent decal, plus a solid
+     disc at the center — together they give the sun some real presence in
+     the sky instead of just being a lighting angle with no visible source */
+  const haloMat = new THREE.SpriteMaterial({map:makeGlowTexture(), transparent:true, depthWrite:false, fog:false, opacity:0.4, blending:THREE.AdditiveBlending});
+  const haloSprite = new THREE.Sprite(haloMat);
+  haloSprite.scale.set(330,330,1);
+  haloSprite.position.copy(sun.position).multiplyScalar(1.6);
+  scene.add(haloSprite);
+  const glowMat = new THREE.SpriteMaterial({map:makeGlowTexture(), transparent:true, depthWrite:false, fog:false, blending:THREE.AdditiveBlending});
+  const glowSprite = new THREE.Sprite(glowMat);
+  glowSprite.scale.set(150,150,1);
+  glowSprite.position.copy(sun.position).multiplyScalar(1.6);
+  scene.add(glowSprite);
+  const sunDisc = new THREE.Mesh(new THREE.SphereGeometry(6,20,20), new THREE.MeshBasicMaterial({color:0xfffaea, fog:false}));
+  sunDisc.position.copy(sun.position).multiplyScalar(1.6);
+  scene.add(sunDisc);
+
+  /* ---------- terrain ---------- */
+  const SEG = 110, SIZE = 460;
+  const half = SIZE/2;
+  const verts = [], colors = [], uvs = [], indices = [];
+  const colLow = new THREE.Color(0x3c6e35), colMid = new THREE.Color(0x5f9a45), colHigh = new THREE.Color(0x9bc470), colPad = new THREE.Color(0x548f42);
+  for(let j=0;j<=SEG;j++){
+    for(let i=0;i<=SEG;i++){
+      const x = -half + SIZE*i/SEG;
+      const z = -half + SIZE*j/SEG;
+      const y = heightAt(x,z);
+      verts.push(x,y,z);
+      uvs.push(i/SEG, j/SEG);
+      const d = Math.sqrt(x*x+z*z);
+      /* large, slow-rolling patches of tonal variation, like real turf under changing light/soil */
+      const patch = Math.sin(x*0.055+z*0.04)*0.5 + Math.sin(x*0.021-z*0.033)*0.5;
+      let c;
+      if(d < FLAT_R+FLAT_BLEND*0.6){
+        c = colPad.clone().lerp(colMid, 0.35 + patch*0.18);
+      } else {
+        const tt = Math.max(0, Math.min(1, (y+1.5)/5 + patch*0.16));
+        c = tt < 0.5 ? colLow.clone().lerp(colMid, tt*2) : colMid.clone().lerp(colHigh, (tt-0.5)*2);
+      }
+      colors.push(c.r,c.g,c.b);
+    }
+  }
+  for(let j=0;j<SEG;j++){
+    for(let i=0;i<SEG;i++){
+      const a = j*(SEG+1)+i, b=a+1, cI=a+(SEG+1), d=cI+1;
+      indices.push(a,cI,b, b,cI,d);
+    }
+  }
+  const terrainGeo = new THREE.BufferGeometry();
+  terrainGeo.setAttribute("position", new THREE.Float32BufferAttribute(verts,3));
+  terrainGeo.setAttribute("color", new THREE.Float32BufferAttribute(colors,3));
+  terrainGeo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs,2));
+  terrainGeo.setIndex(indices);
+  terrainGeo.computeVertexNormals();
+
+  /* procedural grass + bump textures, so the ground reads as turf rather than a flat tint */
+  function makeGrassTexture(){
+    const size = 320;
+    const c = document.createElement("canvas"); c.width = c.height = size;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#5f9a45"; ctx.fillRect(0,0,size,size);
+    const tones = ["#4a7f3a","#6bab4d","#3c6e35","#79b85c","#5a9642"];
+    for(let i=0;i<260;i++){
+      const x=rng()*size, y=rng()*size, r=6+rng()*26;
+      ctx.globalAlpha = 0.14+rng()*0.18;
+      ctx.fillStyle = tones[Math.floor(rng()*tones.length)];
+      ctx.beginPath(); ctx.ellipse(x,y,r,r*(0.5+rng()*0.4),rng()*Math.PI,0,Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for(let i=0;i<2200;i++){
+      const x=rng()*size, y=rng()*size;
+      ctx.fillStyle = rng()>0.5 ? "rgba(25,50,18,0.12)" : "rgba(190,225,150,0.10)";
+      ctx.fillRect(x,y,1.3,2.6);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(42,42);
+    tex.needsUpdate = true;
+    return tex;
+  }
+  function makeGrassBump(){
+    const size = 256;
+    const c = document.createElement("canvas"); c.width = c.height = size;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#808080"; ctx.fillRect(0,0,size,size);
+    for(let i=0;i<3200;i++){
+      const x=rng()*size, y=rng()*size;
+      const v = 60+Math.floor(rng()*140);
+      ctx.fillStyle = `rgb(${v},${v},${v})`;
+      ctx.fillRect(x,y,1.6,3.2);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(42,42);
+    tex.needsUpdate = true;
+    return tex;
+  }
+  const terrainMat = new THREE.MeshStandardMaterial({
+    vertexColors:true,
+    map: makeGrassTexture(),
+    bumpMap: makeGrassBump(),
+    bumpScale: 0.12,
+    flatShading:false,
+    roughness:1
+  });
+  const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+  terrain.receiveShadow = true;
+  scene.add(terrain);
+
+  /* ---------- generic helpers ---------- */
+  function group(x,y,z){ const g = new THREE.Group(); g.position.set(x,y,z); return g; }
+  function mesh(geo,color,opts){
+    opts = opts||{};
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial(Object.assign({color, flatShading:true, roughness:0.8}, opts)));
+    m.castShadow = true; m.receiveShadow = true;
+    return m;
+  }
+  function roundRectPath(ctx,x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+  function makeLabel(text, accentHex){
+    const fontPx = 30, padX = 20, h = 52, dotR = 8;
+    const measure = document.createElement("canvas").getContext("2d");
+    measure.font = `600 ${fontPx}px 'Segoe UI', sans-serif`;
+    const textW = measure.measureText(text).width;
+    const w = Math.ceil(textW + padX*2 + dotR*3);
+    const c = document.createElement("canvas");
+    c.width = w*2; c.height = h*2;
+    const ctx = c.getContext("2d");
+    ctx.scale(2,2);
+    ctx.font = `600 ${fontPx}px 'Segoe UI', sans-serif`;
+    ctx.textBaseline = "middle";
+    roundRectPath(ctx,0,0,w,h,h/2);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fill();
+    ctx.fillStyle = toCss(accentHex);
+    ctx.beginPath(); ctx.arc(padX*0.6+dotR, h/2, dotR, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#233324";
+    ctx.fillText(text, padX*0.6+dotR*2+8, h/2+1);
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthWrite:false}));
+    const s = 0.034;
+    spr.scale.set(w*s, h*s, 1);
+    return spr;
+  }
+
+  /* ---------- reusable robot: "chibi" sticker-style agents + one caped "hero" for the core ---------- */
+  const allRobots = [];
+  function makeEmblemTexture(accent){
+    const w=160,h=190;
+    const c = document.createElement("canvas"); c.width=w; c.height=h;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = toCss(accent);
+    roundRectPath(ctx,8,8,w-16,h-16,24); ctx.fill();
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 6;
+    roundRectPath(ctx,8,8,w-16,h-16,24); ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 78px 'Segoe UI', sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("AI", w/2, h/2+6);
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+  }
+  function makeCapeGeometry(){
+    const geo = new THREE.PlaneGeometry(1.55, 2.3, 6, 9);
+    const pos = geo.attributes.position;
+    for(let idx=0; idx<pos.count; idx++){
+      const x = pos.getX(idx), y = pos.getY(idx);
+      const t = (y + 1.15) / 2.3; // 0 at the hem, 1 at the collar
+      const taper = 0.5 + 0.55*(1-t);
+      const curl = (1-t)*(1-t) * 0.55;
+      const ripple = Math.sin(t*Math.PI*2.2 + x*1.6) * (1-t) * 0.12;
+      pos.setX(idx, x*taper);
+      pos.setZ(idx, -(curl + ripple));
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+    return geo;
+  }
+  function makeRobot(accent, phase, variant){
+    variant = variant || "chibi";
+    const isHero = variant === "hero";
+    const root = group(0,0,0);
+    const bot = group(0,0,0);
+    root.add(bot);
+
+    const neutral = 0xdfe6df, body = isHero ? 0xf2f5f8 : 0xf4f7f2;
+    const bootColor = isHero ? 0xe15a5a : neutral;
+    const heroBlue = 0x2f5fa8, heroNavy = 0x1c2530;
+    const legL = mesh(new THREE.CylinderGeometry(0.28,0.28,0.68,8), neutral);
+    legL.position.set(-0.45,0.58,0); bot.add(legL);
+    const legR = mesh(new THREE.CylinderGeometry(0.28,0.28,0.68,8), neutral);
+    legR.position.set(0.45,0.58,0); bot.add(legR);
+    const bootL = mesh(new THREE.CylinderGeometry(0.3,0.3,0.24,8), bootColor);
+    bootL.position.set(-0.45,0.12,0.05); bot.add(bootL);
+    const bootR = mesh(new THREE.CylinderGeometry(0.3,0.3,0.24,8), bootColor);
+    bootR.position.set(0.45,0.12,0.05); bot.add(bootR);
+
+    const torso = mesh(new THREE.BoxGeometry(1.7,1.9,1.1), body, {roughness:0.55});
+    torso.position.y = 1.85; bot.add(torso);
+
+    if(isHero){
+      const emblem = new THREE.Mesh(new THREE.PlaneGeometry(0.85,1.0), new THREE.MeshBasicMaterial({map:makeEmblemTexture(heroBlue), transparent:true}));
+      emblem.position.set(0,1.95,0.56); bot.add(emblem);
+
+      /* belt, worn low on the torso */
+      const belt = mesh(new THREE.BoxGeometry(1.78,0.22,1.16), heroNavy, {roughness:0.5});
+      belt.position.y = 1.05; bot.add(belt);
+
+      /* rounded pauldrons at each shoulder, fixed to the torso rather than the waving arm */
+      const pauldronGeo = new THREE.SphereGeometry(0.34,12,8,0,Math.PI*2,0,Math.PI/1.9);
+      const pauldronL = mesh(pauldronGeo, heroBlue, {roughness:0.45});
+      pauldronL.position.set(-1.0,2.42,0); bot.add(pauldronL);
+      const pauldronR = mesh(pauldronGeo, heroBlue, {roughness:0.45});
+      pauldronR.position.set(1.0,2.56,0); bot.add(pauldronR);
+
+      /* cape, built with a gentle taper/curl/ripple baked into its geometry so it
+         reads as flowing cloth rather than a stiff card, then pivoted at the
+         collar for a small overall sway */
+      const capePivot = group(0,2.66,-0.58);
+      capePivot.rotation.x = 0.12;
+      const cape = mesh(makeCapeGeometry(), 0xcf3e46, {roughness:0.55, metalness:0, side:THREE.DoubleSide});
+      cape.position.set(0,-1.15,0);
+      capePivot.add(cape);
+      bot.add(capePivot);
+      root.userData.cape = capePivot;
+    } else {
+      const eyeBody = mesh(new THREE.SphereGeometry(0.3,12,12), accent, {emissive:accent, emissiveIntensity:0.9});
+      eyeBody.position.set(0,1.95,0.6); bot.add(eyeBody);
+    }
+
+    const armGeo = new THREE.CylinderGeometry(0.16,0.16,0.9,8);
+    const armL = mesh(armGeo, neutral);
+    armL.position.set(-1.0,1.75,0); armL.rotation.z = 0.3; bot.add(armL);
+    const armRRoot = group(1.0,2.55,0);
+    bot.add(armRRoot);
+    const armR = mesh(armGeo, neutral);
+    armR.position.set(0,-0.45,0); armRRoot.add(armR);
+
+    if(isHero){
+      /* wrist cuffs, added as children of each arm mesh itself so they ride
+         along with the arm's own rotation (armR's parent, armRRoot, is what
+         waves) instead of drifting off during the animation */
+      const cuffGeo = new THREE.CylinderGeometry(0.2,0.2,0.16,8);
+      const cuffL = mesh(cuffGeo, heroNavy, {roughness:0.5});
+      cuffL.position.set(0,-0.32,0); armL.add(cuffL);
+      const cuffR = mesh(cuffGeo, heroNavy, {roughness:0.5});
+      cuffR.position.set(0,-0.32,0); armR.add(cuffR);
+    }
+
+    let headY = 3.35;
+    if(isHero){
+      /* bigger, rounder heroic head with a dark visor band */
+      const head = mesh(new THREE.SphereGeometry(0.72,16,14), body, {roughness:0.45});
+      head.position.y = headY; bot.add(head);
+      const visor = mesh(new THREE.BoxGeometry(0.98,0.4,0.5), 0x1c2530, {roughness:0.3});
+      visor.position.set(0,headY+0.02,0.42); bot.add(visor);
+      const eyeGeo = new THREE.SphereGeometry(0.13,10,10);
+      [-0.26,0.26].forEach(dx=>{
+        const e = mesh(eyeGeo, accent, {emissive:accent, emissiveIntensity:1.1});
+        e.position.set(dx,headY+0.02,0.66); bot.add(e);
+      });
+      const earL = mesh(new THREE.SphereGeometry(0.22,10,10), 0x3b5b86, {roughness:0.4});
+      earL.position.set(-0.76,headY,0); bot.add(earL);
+      const earR = mesh(new THREE.SphereGeometry(0.22,10,10), 0x3b5b86, {roughness:0.4});
+      earR.position.set(0.76,headY,0); bot.add(earR);
+    } else {
+      /* rounder chibi head, big friendly eyes, colored side pods like a sticker character */
+      const head = mesh(new THREE.SphereGeometry(0.64,16,14), body, {roughness:0.55});
+      head.position.y = headY; bot.add(head);
+      const eyeGeo = new THREE.SphereGeometry(0.2,10,10), pupilGeo = new THREE.SphereGeometry(0.08,8,8);
+      [-0.26,0.26].forEach(dx=>{
+        const e = mesh(eyeGeo, 0x233324);
+        e.position.set(dx,headY-0.02,0.54); bot.add(e);
+        const p = mesh(pupilGeo, 0xeafff5);
+        p.position.set(dx-0.06,headY+0.05,0.66); bot.add(p);
+      });
+      const podL = mesh(new THREE.SphereGeometry(0.16,10,10), accent, {emissive:accent, emissiveIntensity:0.4});
+      podL.position.set(-0.66,headY-0.05,0); bot.add(podL);
+      const podR = mesh(new THREE.SphereGeometry(0.16,10,10), accent, {emissive:accent, emissiveIntensity:0.4});
+      podR.position.set(0.66,headY-0.05,0); bot.add(podR);
+    }
+
+    const antenna = mesh(new THREE.CylinderGeometry(0.05,0.05,0.6,6), 0xc7d2c6);
+    antenna.position.set(0,headY+0.68,0); bot.add(antenna);
+    const antennaTip = mesh(new THREE.SphereGeometry(0.15,8,8), accent, {emissive:accent, emissiveIntensity:1});
+    antennaTip.position.set(0,headY+1.03,0); bot.add(antennaTip);
+
+    const rb = {root, bot, armRRoot, antennaTip, cape: root.userData.cape, phase: phase||0};
+    allRobots.push(rb);
+    return rb;
+  }
+
+  /* ---------- shared building parts ---------- */
+  function houseWindow(x,y,z, withBox){
+    const g = group(x,y,z);
+    g.add(mesh(new THREE.BoxGeometry(1.5,1.5,0.15), 0xfff1b8, {emissive:0xffdf8a, emissiveIntensity:0.35}));
+    g.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.5,1.5,0.16)), new THREE.LineBasicMaterial({color:0x8a6a3c})));
+    if(withBox !== false){
+      const box = mesh(new THREE.BoxGeometry(1.9,0.4,0.5), 0x8a5a3c);
+      box.position.set(0,-1.05,0.35);
+      g.add(box);
+      const cols=[0xe8607a,0xf2b143,0xffffff];
+      for(let i=0;i<3;i++){
+        const fl = mesh(new THREE.SphereGeometry(0.16,8,8), cols[i]);
+        fl.position.set(-0.55+i*0.55, -0.8, 0.5);
+        g.add(fl);
+      }
+    }
+    return g;
+  }
+  function smoke(x,y,z,scaleR){
+    const g = group(x,y,z);
+    for(let i=0;i<3;i++){
+      const c = mesh(new THREE.SphereGeometry(0.35*scaleR,8,8), 0xe9e9e9, {roughness:1});
+      c.castShadow=false;
+      c.userData.smokeDelay = i*1.1;
+      g.add(c);
+    }
+    return g;
+  }
+
+  /* ================= CORE (center) ================= */
+  const core = group(0, heightAt(0,0), 0);
+  scene.add(core);
+
+  const coreWalls = mesh(new THREE.BoxGeometry(13,8,11), 0xf7ead0);
+  coreWalls.position.y = 4;
+  core.add(coreWalls);
+
+  const coreRoofGeo = new THREE.ConeGeometry(10.2, 5.6, 4);
+  coreRoofGeo.rotateY(Math.PI/4);
+  const coreRoof = mesh(coreRoofGeo, 0xd9714f, {roughness:0.7});
+  coreRoof.position.y = 8 + 2.8;
+  core.add(coreRoof);
+
+  const coreChimney = mesh(new THREE.BoxGeometry(1,2.4,1), 0xb85a3d);
+  coreChimney.position.set(3.6, 9.2, -1.6);
+  core.add(coreChimney);
+  const coreSmoke = smoke(3.6, 10.6, -1.6, 1.1);
+  core.add(coreSmoke);
+
+  [[-6.0,7.6,1.2,0.62],[6.0,7.6,1.2,-0.62]].forEach(([x,y,z,rz])=>{
+    const s = group(x,y,z);
+    s.rotation.z = rz; s.rotation.y = 0.05;
+    s.add(mesh(new THREE.BoxGeometry(3.6,0.12,2.4), 0x274b6e, {roughness:0.35, metalness:0.2}));
+    core.add(s);
+  });
+
+  const coreAntennaPole = mesh(new THREE.CylinderGeometry(0.07,0.07,3.4,6), 0x8a8a8a);
+  coreAntennaPole.position.set(0, 13.5+1.7, 0);
+  core.add(coreAntennaPole);
+  const coreAntennaTip = mesh(new THREE.SphereGeometry(0.32,12,12), 0x2fbf8f, {emissive:0x2fbf8f, emissiveIntensity:1});
+  coreAntennaTip.position.set(0, 13.5+3.5, 0);
+  core.add(coreAntennaTip);
+  const coreAntennaPole2 = mesh(new THREE.CylinderGeometry(0.05,0.05,2.2,6), 0x8a8a8a);
+  coreAntennaPole2.position.set(-1.6, 13.5+1.1, -0.6);
+  core.add(coreAntennaPole2);
+  const coreAntennaTip2 = mesh(new THREE.SphereGeometry(0.2,10,10), 0xffb15c, {emissive:0xffb15c, emissiveIntensity:1});
+  coreAntennaTip2.position.set(-1.6, 13.5+2.2, -0.6);
+  core.add(coreAntennaTip2);
+
+  core.add(houseWindow(-3.0, 4.8, 5.51));
+  core.add(houseWindow(0.6, 4.8, 5.51));
+  core.add(houseWindow(3.6, 4.8, 5.51));
+
+  const coreDoor = mesh(new THREE.BoxGeometry(1.8,3.1,0.2), 0x2fbf8f, {roughness:0.6});
+  coreDoor.position.set(-1.0, 1.55, 5.51);
+  core.add(coreDoor);
+
+  /* lamp posts flanking the entrance */
+  [-8.4, 8.4].forEach(x=>{
+    const pole = mesh(new THREE.CylinderGeometry(0.09,0.09,3.2,6), 0x8a8a8a);
+    pole.position.set(x, 1.6, 7.5);
+    core.add(pole);
+    const lamp = mesh(new THREE.SphereGeometry(0.28,10,10), 0x2fbf8f, {emissive:0x2fbf8f, emissiveIntensity:0.9});
+    lamp.position.set(x, 3.25, 7.5);
+    core.add(lamp);
+  });
+
+  /* soft glow ring marking the hub on the ground */
+  const hubGlow = new THREE.Mesh(new THREE.RingGeometry(15.5,18.5,48), new THREE.MeshBasicMaterial({color:0x2fbf8f, transparent:true, opacity:0.16, side:THREE.DoubleSide}));
+  hubGlow.rotation.x = -Math.PI/2;
+  hubGlow.position.y = 0.04;
+  scene.add(hubGlow);
+
+  const coreLabel = makeLabel("CORE", 0x2fbf8f);
+  coreLabel.position.set(0, 17.5, 0);
+  core.add(coreLabel);
+
+  /* ---------- hub plaza ---------- */
+  const plaza = mesh(new THREE.CylinderGeometry(15,15.4,0.3,32), 0xc8b487, {roughness:0.9});
+  plaza.position.y = 0.1;
+  scene.add(plaza);
+  const plazaRing = new THREE.Mesh(new THREE.TorusGeometry(15.1,0.08,8,32), new THREE.MeshStandardMaterial({color:0x8a7451, flatShading:true}));
+  plazaRing.rotation.x = Math.PI/2;
+  plazaRing.position.y = 0.28;
+  scene.add(plazaRing);
+
+  /* ================= AGENT SITES (ring) ================= */
+  const RING = 47;
+  const SITES = [
+    {name:"HOME",       accent:0x4fb8e0, build:buildHouse},
+    {name:"PLAYGROUND", accent:0xff8aa5, build:buildPlayground},
+    {name:"HOSPITAL",   accent:0xe15a5a, build:buildHospital},
+    {name:"SCHOOL",     accent:0xf2b143, build:buildSchool},
+    {name:"FACTORY",    accent:0x8fa3b8, build:buildFactory},
+    {name:"MARKET",     accent:0x3ddc97, build:buildMarket},
+  ];
+
+  function buildHouse(site){
+    const walls = mesh(new THREE.BoxGeometry(9,6,7.5), 0xf7ead0);
+    walls.position.y = 3; site.add(walls);
+    const roofGeo = new THREE.ConeGeometry(7.6,4.6,4); roofGeo.rotateY(Math.PI/4);
+    const roof = mesh(roofGeo, 0xd9714f, {roughness:0.7});
+    roof.position.y = 6+2.3; site.add(roof);
+    const chimney = mesh(new THREE.BoxGeometry(0.9,2.2,0.9), 0xb85a3d);
+    chimney.position.set(2.6,8.6,-1.2); site.add(chimney);
+    site.add(smoke(2.6,10,-1.2,1));
+    const solar = group(-3.6,7.4,1.8); solar.rotation.z=0.62; solar.rotation.y=0.05;
+    solar.add(mesh(new THREE.BoxGeometry(3.2,0.12,2.2), 0x274b6e, {roughness:0.35, metalness:0.2}));
+    site.add(solar);
+    const pole = mesh(new THREE.CylinderGeometry(0.05,0.05,2.4,6), 0x8a8a8a);
+    pole.position.set(0,10.6,0); site.add(pole);
+    const tip = mesh(new THREE.SphereGeometry(0.22,10,10), 0x4fb8e0, {emissive:0x4fb8e0, emissiveIntensity:1});
+    tip.position.set(0,11.9,0); site.add(tip);
+    site.add(houseWindow(-2.1,3.6,3.76));
+    site.add(houseWindow(1.6,3.6,3.76));
+    const door = mesh(new THREE.BoxGeometry(1.6,2.9,0.2), 0x4fb8e0, {roughness:0.6});
+    door.position.set(-0.3,1.45,3.76); site.add(door);
+    return {front:6.5, top:12.5};
+  }
+
+  function buildPlayground(site){
+    const mat = mesh(new THREE.CylinderGeometry(4.6,4.6,0.15,24), 0xe2a15c, {roughness:1});
+    mat.position.y=0.08; site.add(mat);
+    const legA = mesh(new THREE.CylinderGeometry(0.18,0.18,2.2,6), 0xffffff);
+    legA.position.set(-1.6,1.1,-1.4); site.add(legA);
+    const legB = mesh(new THREE.CylinderGeometry(0.18,0.18,2.6,6), 0xffffff);
+    legB.position.set(1.2,1.3,-2.0); site.add(legB);
+    const platform = mesh(new THREE.BoxGeometry(1.8,0.25,1.4), 0xf2b143);
+    platform.position.set(-1.6,2.3,-1.4); site.add(platform);
+    const ramp = mesh(new THREE.BoxGeometry(1.6,0.2,3.4), 0xe15a5a);
+    ramp.position.set(0.0,1.1,-0.2); ramp.rotation.x = -0.55; site.add(ramp);
+    [-1.9,1.9].forEach(x=>{
+      const post = mesh(new THREE.CylinderGeometry(0.12,0.12,2.6,6), 0xf2b143);
+      post.position.set(x,1.3,2.2); site.add(post);
+    });
+    const topBar = mesh(new THREE.CylinderGeometry(0.12,0.12,4,6), 0xf2b143);
+    topBar.rotation.z = Math.PI/2; topBar.position.set(0,2.6,2.2); site.add(topBar);
+    [-1.0,1.0].forEach(x=>{
+      const chainL = mesh(new THREE.CylinderGeometry(0.03,0.03,1.2,4), 0xbfc7c2);
+      chainL.position.set(x,2.0,2.2); site.add(chainL);
+      const seat = mesh(new THREE.BoxGeometry(0.6,0.1,0.5), 0xe15a5a);
+      seat.position.set(x,1.4,2.2); site.add(seat);
+    });
+    return {front:6.2, top:5.8};
+  }
+
+  function plainWindow(x,y,z,glow){
+    const g = group(x,y,z);
+    g.add(mesh(new THREE.BoxGeometry(1.4,1.3,0.15), glow||0xdff2ff, {emissive:0xbfe3ff, emissiveIntensity:0.25}));
+    g.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.4,1.3,0.16)), new THREE.LineBasicMaterial({color:0x7c93a8})));
+    return g;
+  }
+
+  function buildHospital(site){
+    const walls = mesh(new THREE.BoxGeometry(7.6,5.6,6.4), 0xf6f8f7, {roughness:0.7});
+    walls.position.y = 2.8; site.add(walls);
+    const roof = mesh(new THREE.BoxGeometry(8,0.4,6.8), 0xd7dee0);
+    roof.position.y = 5.8; site.add(roof);
+    const awning = mesh(new THREE.BoxGeometry(2.6,0.2,0.8), 0xe15a5a);
+    awning.position.set(0,4.0,3.4); site.add(awning);
+    const crossV = mesh(new THREE.BoxGeometry(0.5,1.7,0.1), 0xe15a5a, {emissive:0xe15a5a, emissiveIntensity:0.35});
+    crossV.position.set(0,4.9,3.3); site.add(crossV);
+    const crossH = mesh(new THREE.BoxGeometry(1.7,0.5,0.1), 0xe15a5a, {emissive:0xe15a5a, emissiveIntensity:0.35});
+    crossH.position.set(0,4.9,3.3); site.add(crossH);
+    site.add(plainWindow(-2.3,3.0,3.21));
+    site.add(plainWindow(2.3,3.0,3.21));
+    const door = mesh(new THREE.BoxGeometry(1.6,2.7,0.2), 0xdff2ff, {roughness:0.5});
+    door.position.set(0,1.35,3.21); site.add(door);
+    return {front:6.0, top:9.5};
+  }
+
+  function buildSchool(site){
+    const walls = mesh(new THREE.BoxGeometry(7.8,5.2,6.2), 0xefe0c0);
+    walls.position.y = 2.6; site.add(walls);
+    const roofGeo = new THREE.ConeGeometry(7.0,4.0,4); roofGeo.rotateY(Math.PI/4);
+    const roof = mesh(roofGeo, 0x33507a, {roughness:0.7});
+    roof.position.y = 5.2+2.0; site.add(roof);
+    const cupolaBase = mesh(new THREE.BoxGeometry(1.1,1.0,1.1), 0x33507a);
+    cupolaBase.position.y = 5.2+4.0+0.5; site.add(cupolaBase);
+    const cupolaRoof = mesh(new THREE.ConeGeometry(0.9,1.1,4), 0xd9714f);
+    cupolaRoof.rotation.y = Math.PI/4; cupolaRoof.position.y = 5.2+4.0+1.55; site.add(cupolaRoof);
+    const flagpole = mesh(new THREE.CylinderGeometry(0.04,0.04,1.6,6), 0x8a8a8a);
+    flagpole.position.y = 5.2+4.0+2.5; site.add(flagpole);
+    const flag = mesh(new THREE.BoxGeometry(0.7,0.45,0.03), 0xf2b143);
+    flag.position.set(0.37, 5.2+4.0+3.15, 0); site.add(flag);
+    site.add(houseWindow(-2.2,3.4,3.11, false));
+    site.add(houseWindow(2.2,3.4,3.11, false));
+    const door = mesh(new THREE.BoxGeometry(1.6,2.8,0.2), 0xf2b143, {roughness:0.6});
+    door.position.set(0,1.4,3.11); site.add(door);
+    return {front:6.0, top:12.2};
+  }
+
+  function buildFactory(site){
+    const walls = mesh(new THREE.BoxGeometry(8.2,5.0,6.6), 0xc7cdd2, {roughness:0.6, metalness:0.1});
+    walls.position.y = 2.5; site.add(walls);
+    const roof = mesh(new THREE.BoxGeometry(8.6,0.4,7.0), 0x8fa3b8);
+    roof.position.y = 5.2; site.add(roof);
+    const stack = mesh(new THREE.CylinderGeometry(0.55,0.65,5.0,10), 0x8fa3b8, {roughness:0.5, metalness:0.2});
+    stack.position.set(3.0,5.0+2.5,-1.6); site.add(stack);
+    site.add(smoke(3.0,5.0+5.2,-1.6,1.3));
+    const gearBack = mesh(new THREE.CylinderGeometry(1.1,1.1,0.15,20), 0x556572, {roughness:0.5});
+    gearBack.rotation.x = Math.PI/2; gearBack.position.set(0,3.4,3.31); site.add(gearBack);
+    const gearRing = new THREE.Mesh(new THREE.TorusGeometry(1.05,0.16,8,16), new THREE.MeshStandardMaterial({color:0xffb15c, flatShading:true, roughness:0.5}));
+    gearRing.position.set(0,3.4,3.34); site.add(gearRing);
+    site.add(plainWindow(2.6,2.0,3.31, 0xfff1b8));
+    const door = mesh(new THREE.BoxGeometry(1.7,2.6,0.2), 0x556572, {roughness:0.6});
+    door.position.set(-2.4,1.3,3.31); site.add(door);
+    return {front:6.0, top:11.0};
+  }
+
+  function buildMarket(site){
+    const postGeo = new THREE.CylinderGeometry(0.13,0.13,2.6,6);
+    const corners = [[-2.2,-1.6],[2.2,-1.6],[-2.2,1.6],[2.2,1.6]];
+    corners.forEach(([x,z])=>{
+      const p = mesh(postGeo, 0x8a5a3c);
+      p.position.set(x,1.3,z); site.add(p);
+    });
+    for(let i=-2;i<2;i++){
+      const stripe = mesh(new THREE.BoxGeometry(1.1,0.18,3.6), i%2===0?0xd9714f:0xf7ead0, {roughness:0.7});
+      stripe.position.set(i*1.1+0.55,2.75,0);
+      stripe.rotation.z = -0.04;
+      site.add(stripe);
+    }
+    const counter = mesh(new THREE.BoxGeometry(3.6,1.1,1.0), 0x8a5a3c, {roughness:0.8});
+    counter.position.set(0,0.55,1.0); site.add(counter);
+    const cratePositions = [[-2.6,0.4,1.6],[2.6,0.45,1.4],[2.9,1.1,1.4]];
+    cratePositions.forEach(([x,y,z])=>{
+      const crate = mesh(new THREE.CylinderGeometry(0.4,0.4,0.7,10), 0x7a5233, {roughness:0.9});
+      crate.position.set(x,y,z); site.add(crate);
+    });
+    return {front:5.5, top:5.2};
+  }
+
+  const robotsList = [];
+  const siteCenters = [];
+  SITES.forEach((s,i)=>{
+    const theta = i * (Math.PI*2/SITES.length);
+    const x = RING*Math.cos(theta), z = RING*Math.sin(theta);
+    const y = heightAt(x,z);
+    siteCenters.push({x,z});
+    const site = group(x,y,z);
+    site.rotation.y = Math.atan2(-x, -z);
+    scene.add(site);
+
+    const info = s.build(site);
+
+    const label = makeLabel(s.name, s.accent);
+    label.position.set(0, info.top+1.3, 0);
+    site.add(label);
+
+    const rb = makeRobot(s.accent, i*0.9);
+    rb.root.position.set(0.9, 0, info.front);
+    site.add(rb.root);
+    replaceRobotMesh(rb, "models/chibi-robot.json", 2.7);
+    robotsList.push({dot:s.accent, name:s.name});
+
+    /* the playground's robot patrols in a loop around the play equipment
+       instead of standing still — a first try at "agents that move" */
+    if(s.name === "PLAYGROUND"){
+      rb.patrol = { radius: 5.4, speed: 0.28, phase: rng()*Math.PI*2 };
+    }
+
+    /* stepping-stone spoke path from the plaza edge to this site's entrance —
+       a gentle bow rather than a straight radial line, so it reads as a
+       wandering garden path instead of a spoke on a wheel */
+    const plazaEdge = 15.6;
+    const endR = RING - info.front - 1;
+    const span = endR - plazaEdge;
+    const steps = Math.max(6, Math.round(span/3.2));
+    const bowSign = (i%2===0) ? 1 : -1;
+    const bowAmp = span * (0.16 + rng()*0.09) * bowSign;
+    const wiggleAmp = span * 0.045;
+    const wigglePhase = rng()*Math.PI*2;
+    for(let k=0;k<=steps;k++){
+      const tt = k/steps;
+      const rr = plazaEdge + tt*span;
+      const lateral = bowAmp*Math.sin(tt*Math.PI) + wiggleAmp*Math.sin(tt*Math.PI*3 + wigglePhase)*Math.sin(tt*Math.PI);
+      const ang = theta + lateral/rr;
+      const px = rr*Math.cos(ang), pz = rr*Math.sin(ang);
+      const py = heightAt(px,pz);
+      const stone = mesh(new THREE.CylinderGeometry(1.25+rng()*0.2,1.35+rng()*0.2,0.28,8), 0xc8b487, {roughness:0.9});
+      stone.position.set(px, py+0.14, pz);
+      stone.rotation.y = rng()*Math.PI;
+      scene.add(stone);
+    }
+  });
+
+  /* ---------- scattered grass blades, kept clear of the plaza and every building ---------- */
+  (function grassBlades(){
+    const bladeGeo = new THREE.ConeGeometry(0.055, 0.5, 3);
+    const tones = [0x4a7f3a, 0x5f9a45, 0x6bab4d];
+    const perTone = 2200;
+    const batches = tones.map(color=>{
+      const m = new THREE.InstancedMesh(bladeGeo, new THREE.MeshStandardMaterial({color, flatShading:true, roughness:0.9}), perTone);
+      m.castShadow = false; m.receiveShadow = true;
+      m.count = 0;
+      scene.add(m);
+      return m;
+    });
+    const dummy = new THREE.Object3D();
+    const outerR = FLAT_R + FLAT_BLEND*1.6;
+    let placed = 0, attempts = 0;
+    while(placed < perTone*tones.length && attempts < perTone*tones.length*6){
+      attempts++;
+      const x = (rng()*2-1)*outerR, z = (rng()*2-1)*outerR;
+      const d = Math.sqrt(x*x+z*z);
+      if(d > outerR || d < 17.5) continue;
+      let clear = true;
+      for(let k=0;k<siteCenters.length;k++){
+        const sc = siteCenters[k];
+        if(Math.hypot(x-sc.x, z-sc.z) < 9.5){ clear = false; break; }
+      }
+      if(!clear) continue;
+      const y = heightAt(x,z);
+      const scaleY = 0.6 + rng()*1.0;
+      dummy.position.set(x, y + 0.25*scaleY, z);
+      dummy.rotation.set((rng()-0.5)*0.5, rng()*Math.PI*2, (rng()-0.5)*0.5);
+      dummy.scale.set(0.8+rng()*0.5, scaleY, 0.8+rng()*0.5);
+      dummy.updateMatrix();
+      const b = batches[placed % batches.length];
+      b.setMatrixAt(b.count, dummy.matrix);
+      b.count++;
+      placed++;
+    }
+    batches.forEach(b=>{ b.instanceMatrix.needsUpdate = true; });
+  })();
+
+  /* legend under the caption, driven by the same data */
+  const legendEl = document.getElementById("legend");
+  legendEl.innerHTML = `<li><span class="dot" style="background:${toCss(0x2fbf8f)}"></span>Core</li>` +
+    robotsList.map(r=>`<li><span class="dot" style="background:${toCss(r.dot)}"></span>${r.name.charAt(0)+r.name.slice(1).toLowerCase()}</li>`).join("");
+
+  /* ---------- core's companion drone ---------- */
+  const coreRobot = makeRobot(0x2fbf8f, 0, "hero");
+  coreRobot.root.position.set(-1.4, 0, 9.5);
+  core.add(coreRobot.root);
+  replaceRobotMesh(coreRobot, "models/hero-robot.json", 4.6);
+
+  const droneRoot = group(-3.0, 5.2, 9.0);
+  core.add(droneRoot);
+  const droneBody = mesh(new THREE.SphereGeometry(0.4,12,12), 0xffffff, {roughness:0.4});
+  droneRoot.add(droneBody);
+  const droneEye = mesh(new THREE.SphereGeometry(0.16,10,10), 0x2fbf8f, {emissive:0x2fbf8f, emissiveIntensity:0.9});
+  droneEye.position.z = 0.32; droneRoot.add(droneEye);
+  const ring2 = mesh(new THREE.TorusGeometry(0.62,0.05,8,20), 0xdfe6df, {roughness:0.5});
+  ring2.rotation.x = Math.PI/2; droneRoot.add(ring2);
+
+  /* ---------- trees on the outer hills ---------- */
+  function tree(x,z){
+    const y = heightAt(x,z);
+    const g = group(x,y,z);
+    const trunk = mesh(new THREE.CylinderGeometry(0.28,0.34,2.1,6), 0x7a5233);
+    trunk.position.y = 1.05; g.add(trunk);
+    const leafColor = rng()>0.5 ? 0x4d8a3c : 0x6bab4d;
+    for(let i=0;i<3;i++){
+      const r = 1.7 - i*0.35;
+      const cone = mesh(new THREE.ConeGeometry(r,1.8,7), leafColor, {roughness:0.85});
+      cone.position.y = 2.1 + i*1.25; g.add(cone);
+    }
+    scene.add(g);
+  }
+  const treeSpots = [[-86,24],[-78,-40],[70,54],[81,22],[-22,-92],[40,-84],[-68,70],[94,-32],[-94,-11],[14,97],[-40,89],[89,70],[-100,45],[100,-60]];
+  treeSpots.forEach(p=>tree(p[0],p[1]));
+
+  /* ---------- clouds ----------
+     an irregular cluster of smooth, squashed puffs instead of a handful of
+     faceted icosahedra in identical positions — each puff is tinted from a
+     cool shaded grey-blue underside up to a warm sunlit-white top, so the
+     cluster reads as one soft volume with its own light and shadow side,
+     on top of however the scene's actual lights hit it */
+  const clouds = [];
+  const cloudLit = new THREE.Color(0xfffdf3);
+  const cloudShade = new THREE.Color(0xcdd7db);
+  function cloudPuff(x,y,z,s){
+    const g = group(x,y,z);
+    const puffCount = 8 + Math.floor(rng()*5);
+    for(let i=0;i<puffCount;i++){
+      const dx = (rng()-0.5)*6.4;
+      const dz = (rng()-0.5)*3.6;
+      const dy = (rng()-0.5)*1.8;
+      const r = 1.2 + rng()*1.9;
+      const heightT = Math.min(1, Math.max(0, dy/0.9 + 0.45));
+      const col = cloudShade.clone().lerp(cloudLit, heightT);
+      const puff = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(r, 1),
+        new THREE.MeshStandardMaterial({color:col, flatShading:false, roughness:0.95})
+      );
+      puff.position.set(dx, dy*0.55, dz);
+      puff.scale.y = 0.66 + rng()*0.16;
+      puff.rotation.set(rng()*Math.PI, rng()*Math.PI*2, rng()*Math.PI);
+      g.add(puff);
+    }
+    g.scale.setScalar(s);
+    g.rotation.y = rng()*Math.PI*2;
+    scene.add(g);
+    clouds.push(g);
+  }
+  cloudPuff(-68,74,-80,1.2);
+  cloudPuff(54,86,-92,1.0);
+  cloudPuff(100,68,26,0.8);
+  cloudPuff(-106,64,40,0.9);
+  cloudPuff(14,90,104,0.75);
+  cloudPuff(-30,80,-118,0.85);
+  cloudPuff(140,78,-40,1.05);
+  cloudPuff(-140,70,-8,0.95);
+  cloudPuff(28,96,-150,0.7);
+
+  /* ---------- animation loop ---------- */
+  const clock = new THREE.Clock();
+  function animate(){
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    controls.update();
+
+    if(!reduceMotion){
+      allRobots.forEach(rb=>{
+        if(rb.patrol){
+          const p = rb.patrol;
+          const angle = t*p.speed + p.phase;
+          rb.root.position.set(p.radius*Math.cos(angle), 0, p.radius*Math.sin(angle));
+          /* face the direction of travel: rotation.y = atan2(dx,dz) points the
+             model's local +Z (its established "front", used everywhere else
+             in this scene) along the velocity vector for this circle */
+          rb.root.rotation.y = Math.atan2(-Math.sin(angle), Math.cos(angle));
+        }
+        rb.bot.position.y = Math.sin(t*2.4 + rb.phase)*0.08 + 0.08;
+        if(rb.isGLTF){
+          /* no rig on the loaded model, so a slow idle sway stands in for the
+             procedural placeholder's arm-wave */
+          rb.bot.rotation.y = Math.sin(t*0.5 + rb.phase)*0.18;
+        } else {
+          rb.armRRoot.rotation.z = Math.sin(t*3 + rb.phase)*0.5 - 0.2;
+          rb.antennaTip.material.emissiveIntensity = 0.6 + Math.sin(t*3.2 + rb.phase)*0.4;
+          if(rb.cape){ rb.cape.rotation.z = Math.sin(t*1.6 + rb.phase)*0.06; }
+        }
+      });
+      coreAntennaTip.material.emissiveIntensity = 0.6 + Math.sin(t*2.1)*0.4;
+      coreAntennaTip2.material.emissiveIntensity = 0.6 + Math.sin(t*2.6+1)*0.4;
+      hubGlow.material.opacity = 0.12 + Math.sin(t*1.1)*0.05;
+
+      scene.traverse(o=>{
+        if(o.userData && typeof o.userData.smokeDelay === "number"){
+          const phase = ((t*0.6 + o.userData.smokeDelay) % 3.4)/3.4;
+          o.position.y = phase*2.2;
+          o.scale.setScalar(1 + phase*0.6);
+          o.material.transparent = true;
+          o.material.opacity = 0.55*(1-phase);
+        }
+      });
+
+      droneRoot.position.y = 5.2 + Math.sin(t*1.6)*0.25;
+      droneRoot.position.x = -3.0 + Math.sin(t*0.8)*0.3;
+      droneRoot.rotation.y = t*0.8;
+
+      clouds.forEach((c,i)=>{
+        c.position.x += 0.012 + i*0.002;
+        if(c.position.x > 210) c.position.x = -210;
+      });
+
+      /* the sun's brightness actually drives the scene's lighting — a slow
+         drift (like thin haze passing over) that dims and brightens the
+         real directional/ambient light together, with the glow, halo and
+         disc breathing in step so the visible source matches what's
+         actually lighting everything */
+      const sunPower = 0.85 + Math.sin(t*0.09)*0.15;
+      sun.intensity = sunBaseIntensity * sunPower;
+      hemi.intensity = hemiBaseIntensity * (0.92 + 0.08*sunPower);
+      glowSprite.material.opacity = (0.85*sunPower) + Math.sin(t*0.7)*0.05;
+      haloSprite.material.opacity = 0.4*sunPower;
+      const glowScale = 150*(0.94+0.08*sunPower);
+      glowSprite.scale.set(glowScale, glowScale, 1);
+      const haloScale = 330*(0.94+0.08*sunPower);
+      haloSprite.scale.set(haloScale, haloScale, 1);
+    }
+
+    renderer.render(scene, camera);
+  }
+  loadingEl.remove();
+  animate();
+})();
+</script>
