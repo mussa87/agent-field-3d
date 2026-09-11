@@ -129,6 +129,112 @@
     pointer-events:none;
     max-width:70%;
   }
+  .sitepanel{
+    position:absolute;
+    right:14px;
+    bottom:14px;
+    width:280px;
+    max-width:46%;
+    max-height:calc(100% - 84px);
+    overflow:auto;
+    font-size:12px;
+    color:#233324;
+    background:rgba(255,255,255,0.92);
+    backdrop-filter:blur(6px);
+    border:1px solid rgba(255,255,255,0.6);
+    border-radius:16px;
+    padding:14px 16px 16px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.2);
+    z-index:5;
+  }
+  .sitepanel[hidden]{display:none;}
+  .sitepanel h2{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-family:inherit;
+    font-size:14px;
+    font-weight:700;
+    margin:0 22px 6px 0;
+    color:#233324;
+  }
+  .sitepanel h2 .dot{width:9px;height:9px;border-radius:50%;flex:none;}
+  .sitepanel-close{
+    position:absolute;
+    right:10px;
+    top:10px;
+    width:22px;
+    height:22px;
+    line-height:20px;
+    text-align:center;
+    font-size:15px;
+    border:none;
+    border-radius:50%;
+    background:rgba(0,0,0,0.06);
+    color:#233324;
+    cursor:pointer;
+    padding:0;
+  }
+  .sitepanel-close:hover{background:rgba(0,0,0,0.12);}
+  .sitepanel-close:focus-visible{outline:2px solid var(--mint);outline-offset:2px;}
+  .sitepanel-meta{font-size:11px;color:var(--ink-dim);margin:0 0 10px;}
+  .sitepanel-entry{padding:8px 0;border-top:1px solid var(--panel-line);}
+  .sitepanel-entry:first-child{border-top:none;padding-top:0;}
+  .sitepanel-entry-desc{font-size:12px;color:#233324;line-height:1.4;}
+  .sitepanel-entry-meta{font-size:10.5px;color:var(--ink-dim);margin-top:3px;}
+  .sitepanel-empty{font-size:12px;color:var(--ink-dim);margin:0;}
+  .backendmeta{
+    font-size:11.5px;
+    color:var(--ink-dim);
+    margin:0 0 12px;
+  }
+  .kpi-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(148px,1fr));
+    gap:10px;
+    padding:0;
+    margin:6px 0 0;
+    list-style:none;
+  }
+  .kpi-card{
+    display:block;
+    width:100%;
+    text-align:left;
+    font:inherit;
+    color:inherit;
+    background:rgba(255,255,255,0.7);
+    border:1px solid var(--panel-line);
+    border-radius:14px;
+    padding:10px 12px;
+    cursor:pointer;
+  }
+  .kpi-card:hover{background:rgba(255,255,255,0.92);}
+  .kpi-card:focus-visible{outline:2px solid var(--mint);outline-offset:2px;}
+  .kpi-card .kpi-name{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    font-size:12.5px;
+    font-weight:600;
+    color:#233324;
+  }
+  .kpi-card .kpi-name .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+  .kpi-card .kpi-status{
+    display:block;
+    font-size:10.5px;
+    font-weight:700;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    margin:6px 0 4px;
+  }
+  .kpi-card .kpi-status.working{color:#1f8a5f;}
+  .kpi-card .kpi-status.idle{color:var(--ink-dim);}
+  .kpi-card .kpi-status.unknown{color:#a8874f;}
+  .kpi-card .kpi-counts{display:block;font-size:11.5px;color:var(--ink-dim);}
+  .kpi-card .kpi-sources{display:block;font-size:11px;color:var(--ink-dim);margin-top:2px;}
+  @media (max-width:480px){
+    .sitepanel{width:auto;left:14px;right:14px;max-width:none;}
+  }
 </style>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -139,6 +245,12 @@
   <button class="resetbtn" id="resetbtn" type="button">reset view</button>
   <div class="modelstatus" id="modelstatus" hidden></div>
   <div class="hint" id="hint">🖱️ drag to orbit · right-drag to pan · scroll to zoom</div>
+  <div class="sitepanel" id="sitepanel" role="dialog" aria-labelledby="sitepanelTitle" hidden>
+    <button class="sitepanel-close" id="sitepanelClose" type="button" aria-label="Close panel">&times;</button>
+    <h2 id="sitepanelTitle"></h2>
+    <p class="sitepanel-meta" id="sitepanelMeta"></p>
+    <div id="sitepanelList"></div>
+  </div>
 </div>
 
 <div class="caption">
@@ -146,6 +258,9 @@
   <h1>One core, six agents, each with its own unit stationed outside</h1>
   <p>A bigger low-poly campus: the command house at the center, six agent buildings ringed around it on their own paths, and a robot stationed by each — every one a live WebGL scene you can orbit and zoom.</p>
   <ul class="legend" id="legend"></ul>
+  <p class="eyebrow" id="kpiEyebrow">Live agent activity</p>
+  <p class="backendmeta" id="backendmeta" aria-live="polite">Connecting to live agent data…</p>
+  <div class="kpi-grid" id="kpigrid"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -730,6 +845,7 @@
 
   /* ================= CORE (center) ================= */
   const core = group(0, heightAt(0,0), 0);
+  core.userData.isCore = true; /* used by the click raycaster below to identify the central orchestrator building */
   scene.add(core);
 
   const coreWalls = mesh(new THREE.BoxGeometry(13,8,11), 0xf7ead0);
@@ -791,6 +907,18 @@
   hubGlow.rotation.x = -Math.PI/2;
   hubGlow.position.y = 0.04;
   scene.add(hubGlow);
+
+  /* busy-state halo for the orchestrator core — separate from hubGlow above
+     (which is a purely decorative always-on pulse tied to !reduceMotion):
+     this ring starts hidden and only switches on when live backend data
+     says the orchestrator is currently busy (see applyBusyToScene() near
+     the end of this script), and is never itself animated — so it stays a
+     valid, always-checkable signal even when reduceMotion is active */
+  const coreBusyHalo = new THREE.Mesh(new THREE.RingGeometry(19.6,21.4,48), new THREE.MeshBasicMaterial({color:0x2fbf8f, transparent:true, opacity:0.42, side:THREE.DoubleSide, depthWrite:false}));
+  coreBusyHalo.rotation.x = -Math.PI/2;
+  coreBusyHalo.position.y = 0.05;
+  coreBusyHalo.visible = false;
+  scene.add(coreBusyHalo);
 
   const coreLabel = makeLabel("ORCHESTRATOR", 0x2fbf8f);
   coreLabel.position.set(0, 17.5, 0);
@@ -954,6 +1082,8 @@
 
   const robotsList = [];
   const siteCenters = [];
+  const robotBySiteIndex = [];
+  const siteHaloBySiteIndex = [];
   SITES.forEach((s,i)=>{
     const theta = i * (Math.PI*2/SITES.length);
     const x = RING*Math.cos(theta), z = RING*Math.sin(theta);
@@ -961,6 +1091,7 @@
     siteCenters.push({x,z});
     const site = group(x,y,z);
     site.rotation.y = Math.atan2(-x, -z);
+    site.userData.siteIndex = i; /* used by the click raycaster below to identify which ring site was hit */
     scene.add(site);
 
     const info = s.build(site);
@@ -969,17 +1100,34 @@
     label.position.set(0, info.top+1.3, 0);
     site.add(label);
 
+    /* busy-state halo, in this site's own accent color — hidden by default,
+       switched on live once backend data says this agentType is busy (see
+       applyBusyToScene() near the end of this script); a non-motion signal
+       that stays visible even with reduceMotion active */
+    const busyHalo = new THREE.Mesh(new THREE.RingGeometry(7.6,9.0,40), new THREE.MeshBasicMaterial({color:s.accent, transparent:true, opacity:0.4, side:THREE.DoubleSide, depthWrite:false}));
+    busyHalo.rotation.x = -Math.PI/2;
+    busyHalo.position.y = 0.06;
+    busyHalo.visible = false;
+    site.add(busyHalo);
+    siteHaloBySiteIndex.push(busyHalo);
+
     const rb = makeRobot(s.accent, i*0.9);
     rb.root.position.set(0.9, 0, info.front);
     site.add(rb.root);
     replaceRobotMesh(rb, "models/chibi-robot.json", 2.7);
     robotsList.push({dot:s.accent, name:s.name});
+    robotBySiteIndex.push(rb);
 
-    /* the tester's robot patrols in a loop around the play equipment
-       instead of standing still — a first try at "agents that move" */
-    if(s.patrol){
-      rb.patrol = { radius: 5.4, speed: 0.28, phase: rng()*Math.PI*2 };
-    }
+    /* every site's robot now carries a patrol config (not just the one
+       "tester" building had before) — whether it's actually USED each
+       frame is decided live from real backend activity, in
+       applyBusyToScene() near the end of this script. `s.patrol` (still
+       true only for "tester") is kept only as the last-resort default used
+       when the live backend can't be reached at all this session — see
+       applyBusyToScene() for exactly where that fallback applies. */
+    rb.homePos = {x:0.9, y:0, z:info.front};
+    rb.patrolCfg = { radius: Math.min(5.4, info.front-0.6), speed: 0.28, phase: rng()*Math.PI*2 };
+    rb.patrolActive = !!s.patrol;
 
     /* stepping-stone spoke path from the plaza edge to this site's entrance —
        a gentle bow rather than a straight radial line, so it reads as a
@@ -1062,6 +1210,9 @@
   coreRobot.root.position.set(-1.4, 0, 9.5);
   core.add(coreRobot.root);
   replaceRobotMesh(coreRobot, "models/hero-robot.json", 4.6);
+  coreRobot.homePos = {x:-1.4, y:0, z:9.5};
+  coreRobot.patrolCfg = { radius: 4.5, speed: 0.22, phase: rng()*Math.PI*2 };
+  coreRobot.patrolActive = false; /* overridden live once backend data connects — see applyBusyToScene() */
 
   const droneRoot = group(-3.0, 5.2, 9.0);
   core.add(droneRoot);
@@ -1132,6 +1283,312 @@
   cloudPuff(-140,70,-8,0.95);
   cloudPuff(28,96,-150,0.7);
 
+  /* ================= LIVE BACKEND DATA, CLICK PANEL, KPI GRID ================= */
+
+  /* shared per-agentType accent lookup, reused by the KPI grid and the
+     click panel header dot (the per-site busy halo above already used
+     `s.accent` directly at creation time) */
+  const accentByType = {orchestrator: 0x2fbf8f};
+  SITES.forEach(s=>{ accentByType[s.name] = s.accent; });
+
+  /* the API's roster is documented as always containing exactly these 7
+     entries (zero-filled when idle) — only used to paint the KPI grid
+     before the very first successful response arrives; every render after
+     that uses the live payload's own `agentTypes` array verbatim */
+  const FALLBACK_ROSTER = ["auditor","backend-dotnet","chat","frontend-ux-ui","orchestrator","sql","tester"];
+
+  const BACKEND_BASE = "http://127.0.0.1:8420";
+  const RECENT_WINDOW_MS = 5*60*1000; // 5 minutes
+
+  let backendReachable = false;
+  let lastPayload = null;
+  let currentPanelType = null; // an agentType string, or "orchestrator" for the core; null = panel closed
+
+  /* "busy" = the server says it's active right now, OR (client-computed,
+     per this feature's spec) any agent of that type had activity within
+     the last 5 minutes. We deliberately do NOT lean on the server's own
+     `recent` counter for this: a live check against the real backend
+     during development showed its window is wider than 5 minutes — one
+     observed response had orchestrator.active=1 but orchestrator.recent=2,
+     and the 2nd-most-recently-active orchestrator entry's lastActivityAt
+     was already ~9.6 minutes before that response's generatedAt, i.e. well
+     outside a 5-minute window. So server `recent` and a strict 5-minute
+     rule are two different things on this backend; per the task spec, the
+     client-side 5-minute check (against Date.now()) is treated as the
+     source of truth for the busy/idle VISUAL state, while the raw server
+     numbers are still shown as their own clearly-labeled stats (see
+     renderKPI/renderSitePanel) rather than silently discarded. */
+  function typeIsBusy(typeStat, agentsOfType){
+    if(typeStat && typeStat.active > 0) return true;
+    const now = Date.now();
+    return agentsOfType.some(a=> a.lastActivityAt && (now - new Date(a.lastActivityAt).getTime()) < RECENT_WINDOW_MS);
+  }
+  function isEntryActiveOrRecent(a){
+    if(a.status === "running_tool" || a.status === "running") return true; // "running_tool" is the only in-progress value observed live; "running" kept defensively
+    if(!a.lastActivityAt) return false;
+    return (Date.now() - new Date(a.lastActivityAt).getTime()) < RECENT_WINDOW_MS;
+  }
+
+  /* ---------- push live/offline state onto the 3D scene ---------- */
+  function applyBusyToScene(){
+    SITES.forEach((s,i)=>{
+      const rb = robotBySiteIndex[i];
+      const halo = siteHaloBySiteIndex[i];
+      let busy;
+      if(!backendReachable){
+        /* backend never reachable this session — the only signal left is
+           the original static per-site flag (true only for "tester"), so
+           the scene doesn't look entirely inert with zero information
+           available; this is its one remaining use. */
+        busy = !!s.patrol;
+      } else {
+        const ts = lastPayload.agentTypes.find(t=>t.agentType===s.name);
+        const agentsOfType = lastPayload.agents.filter(a=>a.agentType===s.name);
+        busy = typeIsBusy(ts, agentsOfType);
+      }
+      if(rb) rb.patrolActive = busy;
+      if(halo) halo.visible = busy;
+    });
+    let coreBusy = false;
+    if(backendReachable){
+      const ts = lastPayload.agentTypes.find(t=>t.agentType==="orchestrator");
+      const agentsOfType = lastPayload.agents.filter(a=>a.agentType==="orchestrator");
+      coreBusy = typeIsBusy(ts, agentsOfType);
+    }
+    coreRobot.patrolActive = coreBusy;
+    coreBusyHalo.visible = coreBusy;
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+  function relativeTime(iso){
+    if(!iso) return "unknown time";
+    const d = new Date(iso);
+    if(isNaN(d.getTime())) return "unknown time";
+    const mins = Math.max(0, Math.round((Date.now()-d.getTime())/60000));
+    if(mins < 1) return "just now";
+    if(mins < 60) return mins + "m ago";
+    const hrs = Math.round(mins/60);
+    if(hrs < 24) return hrs + "h ago";
+    return d.toLocaleString();
+  }
+
+  /* ---------- KPI grid (lives in .caption, right after the legend) ---------- */
+  const kpiGridEl = document.getElementById("kpigrid");
+  const backendMetaEl = document.getElementById("backendmeta");
+  function renderKPI(){
+    if(!kpiGridEl) return;
+    const types = (lastPayload && lastPayload.agentTypes) || FALLBACK_ROSTER.map(t=>({agentType:t,total:0,active:0,recent:0}));
+    kpiGridEl.innerHTML = types.map(ts=>{
+      const type = ts.agentType;
+      const accent = accentByType[type] != null ? accentByType[type] : 0x8a8a8a;
+      const agentsOfType = lastPayload ? lastPayload.agents.filter(a=>a.agentType===type) : [];
+      const busy = backendReachable ? typeIsBusy(ts, agentsOfType) : false;
+      const statusClass = !backendReachable ? "unknown" : (busy ? "working" : "idle");
+      const statusLabel = !backendReachable ? "Unknown" : (busy ? "Working" : "Idle");
+      const sourceSet = new Set(agentsOfType.map(a=>a.source && a.source.client).filter(Boolean));
+      const sourcesText = !backendReachable ? "No data (offline)" : (sourceSet.size ? [...sourceSet].map(escapeHtml).join(", ") : "No data");
+      return `<button class="kpi-card" type="button" data-agent-type="${escapeHtml(type)}" aria-haspopup="dialog">` +
+        `<span class="kpi-name"><span class="dot" style="background:${toCss(accent)}"></span>${escapeHtml(titleCaseSlug(type))}</span>` +
+        `<span class="kpi-status ${statusClass}">${statusLabel}</span>` +
+        `<span class="kpi-counts">Active: ${ts.active} · Total: ${ts.total}</span>` +
+        `<span class="kpi-sources">${sourcesText}</span>` +
+      `</button>`;
+    }).join("");
+  }
+  /* KPI cards are real, focusable DOM <button>s — unlike the 3D buildings,
+     which live inside a <canvas role="img"> and can't be reached by
+     keyboard or a screen reader. Activating one opens the exact same panel
+     as clicking that agent's building in the scene, so keyboard users get
+     equivalent access to the same information (a deliberate accessibility
+     bridge for the one part of this feature — raycast picking on a canvas
+     — that has no native keyboard equivalent). */
+  if(kpiGridEl){
+    kpiGridEl.addEventListener("click", (e)=>{
+      const btn = e.target.closest(".kpi-card");
+      if(btn) openSitePanel(btn.getAttribute("data-agent-type"));
+    });
+  }
+
+  /* ---------- click panel ---------- */
+  const sitepanelEl = document.getElementById("sitepanel");
+  const sitepanelTitleEl = document.getElementById("sitepanelTitle");
+  const sitepanelMetaEl = document.getElementById("sitepanelMeta");
+  const sitepanelListEl = document.getElementById("sitepanelList");
+  function openSitePanel(type){
+    currentPanelType = type;
+    renderSitePanel();
+    if(sitepanelEl){
+      sitepanelEl.hidden = false;
+      const closeBtn = document.getElementById("sitepanelClose");
+      if(closeBtn) closeBtn.focus();
+    }
+  }
+  function closeSitePanel(){
+    currentPanelType = null;
+    if(sitepanelEl) sitepanelEl.hidden = true;
+  }
+  function renderSitePanel(){
+    if(!currentPanelType || !sitepanelEl) return;
+    const type = currentPanelType;
+    const accent = accentByType[type] != null ? accentByType[type] : 0x8a8a8a;
+    sitepanelTitleEl.innerHTML = `<span class="dot" style="background:${toCss(accent)}"></span>${escapeHtml(titleCaseSlug(type))}`;
+    const ts = lastPayload ? lastPayload.agentTypes.find(t=>t.agentType===type) : null;
+    const agentsOfType = lastPayload ? lastPayload.agents.filter(a=>a.agentType===type) : [];
+    if(!backendReachable){
+      sitepanelMetaEl.textContent = "Live backend unreachable — showing no data.";
+    } else if(ts){
+      sitepanelMetaEl.textContent = `Active: ${ts.active} · Recent: ${ts.recent} · Total: ${ts.total}`;
+    } else {
+      sitepanelMetaEl.textContent = "";
+    }
+    const relevant = agentsOfType.filter(isEntryActiveOrRecent)
+      .sort((a,b)=> new Date(b.lastActivityAt||0) - new Date(a.lastActivityAt||0));
+    if(!backendReachable){
+      sitepanelListEl.innerHTML = `<p class="sitepanel-empty">No live connection to the agent backend right now.</p>`;
+    } else if(relevant.length === 0){
+      sitepanelListEl.innerHTML = `<p class="sitepanel-empty">${(ts && ts.total > 0) ? "No active or recent activity for this agent right now." : "No recorded activity for this agent yet."}</p>`;
+    } else {
+      sitepanelListEl.innerHTML = relevant.map(a=>{
+        const src = [a.source && a.source.client, a.source && a.source.project].filter(Boolean).join(" · ") || "unknown source";
+        return `<div class="sitepanel-entry">` +
+          `<div class="sitepanel-entry-desc">${escapeHtml(a.description || "(no description)")}</div>` +
+          `<div class="sitepanel-entry-meta">${escapeHtml(src)} · started ${escapeHtml(relativeTime(a.startedAt))} · ${escapeHtml(a.status || "unknown")}</div>` +
+        `</div>`;
+      }).join("");
+    }
+  }
+  const sitepanelCloseBtn = document.getElementById("sitepanelClose");
+  if(sitepanelCloseBtn) sitepanelCloseBtn.addEventListener("click", closeSitePanel);
+  /* dismissal: Escape, or a pointerdown anywhere outside the panel (and
+     outside the canvas / KPI grid, which have their own click handling
+     that decides whether to open a different panel or close this one) —
+     matching the closable/click-away pattern already used for the reset
+     button and other pill controls in this scene */
+  document.addEventListener("keydown", (e)=>{
+    if(e.key === "Escape") closeSitePanel();
+  });
+  document.addEventListener("pointerdown", (e)=>{
+    if(!sitepanelEl || sitepanelEl.hidden) return;
+    if(sitepanelEl.contains(e.target)) return;
+    if(renderer.domElement.contains(e.target)) return;
+    if(kpiGridEl && kpiGridEl.contains(e.target)) return;
+    closeSitePanel();
+  });
+
+  /* ---------- click detection on the 3D scene ---------- */
+  const clickRaycaster = new THREE.Raycaster();
+  const clickNdc = new THREE.Vector2();
+  let pointerDownAt = null;
+  renderer.domElement.addEventListener("pointerdown", (e)=>{
+    pointerDownAt = {x:e.clientX, y:e.clientY};
+  });
+  renderer.domElement.addEventListener("click", (e)=>{
+    const down = pointerDownAt;
+    pointerDownAt = null;
+    const moved = down ? Math.hypot(e.clientX-down.x, e.clientY-down.y) : 999;
+    /* guard against orbit drags being mistaken for clicks: OrbitControls
+       fires its "start"/"end" pair (which toggles the `stage` "dragging"
+       class, wired up near where `controls` is constructed above) on
+       every pointerdown/up regardless of whether the pointer actually
+       moved, so by the time a browser "click" event lands that class has
+       typically already cleared again — the real guard is the pointer
+       movement-distance check below; the dragging class is kept as a
+       defensive second check on top of it. */
+    if(moved > 6) return;
+    if(stage.classList.contains("dragging")) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    clickNdc.set(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
+    clickRaycaster.setFromCamera(clickNdc, camera);
+    const hits = clickRaycaster.intersectObjects(scene.children, true);
+    for(let h=0; h<hits.length; h++){
+      let obj = hits[h].object;
+      while(obj){
+        if(obj.userData){
+          if(obj.userData.isCore){ openSitePanel("orchestrator"); return; }
+          if(typeof obj.userData.siteIndex === "number"){ openSitePanel(SITES[obj.userData.siteIndex].name); return; }
+        }
+        obj = obj.parent;
+      }
+    }
+    closeSitePanel();
+  });
+
+  /* ---------- backend connection ----------
+     EventSource is used as the primary transport: GET /api/stream was
+     confirmed live during development (a manual `curl -D-` against it
+     showed `Content-Type: text/event-stream; charset=utf-8` and
+     `Access-Control-Allow-Origin: *`), so a persistent SSE connection gives
+     near-live updates with no polling-interval tradeoff. If EventSource
+     isn't available, or the connection errors out, this falls back to
+     polling GET /api/agents every 4s — this keeps the KPI grid and
+     busy-state working (a little less "live") instead of leaving the page
+     stuck on stale/offline data, and if the SSE connection later recovers
+     on its own (browsers auto-retry it), the fallback poll loop is stopped
+     again so the two don't run at once. */
+  let pollTimer = null;
+  function stopPolling(){
+    if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  }
+  function startPolling(){
+    if(pollTimer) return;
+    const poll = ()=>{
+      fetch(BACKEND_BASE + "/api/agents", {cache:"no-store"})
+        .then(res=>{
+          if(!res.ok) throw new Error("HTTP " + res.status);
+          return res.json();
+        })
+        .then(applyAgentPayload)
+        .catch(onBackendUnreachable);
+    };
+    poll();
+    pollTimer = setInterval(poll, 4000);
+  }
+  function applyAgentPayload(payload){
+    lastPayload = payload;
+    backendReachable = true;
+    if(backendMetaEl) backendMetaEl.textContent = "Live · updated " + relativeTime(payload.generatedAt);
+    applyBusyToScene();
+    renderKPI();
+    if(currentPanelType) renderSitePanel();
+  }
+  function onBackendUnreachable(){
+    backendReachable = false;
+    if(backendMetaEl){
+      backendMetaEl.textContent = lastPayload
+        ? "Offline — showing last known data from " + relativeTime(lastPayload.generatedAt)
+        : "Offline — no agent data available.";
+    }
+    applyBusyToScene();
+    renderKPI();
+    if(currentPanelType) renderSitePanel();
+  }
+  if(typeof EventSource === "undefined"){
+    startPolling();
+  } else {
+    try{
+      const es = new EventSource(BACKEND_BASE + "/api/stream");
+      es.onmessage = (ev)=>{
+        try{
+          applyAgentPayload(JSON.parse(ev.data));
+          stopPolling(); // SSE is alive again — no need for the fallback loop
+        }catch(e){ /* one malformed frame — keep the connection open and wait for the next one */ }
+      };
+      es.onerror = ()=>{
+        onBackendUnreachable();
+        startPolling(); // keep the UI live via polling until/unless SSE recovers on its own
+      };
+    }catch(e){
+      startPolling();
+    }
+  }
+
+  /* paint an initial (connecting/offline) state immediately, so the KPI
+     grid and scene never sit blank while the first response is in flight */
+  applyBusyToScene();
+  renderKPI();
+
   /* ---------- animation loop ---------- */
   const clock = new THREE.Clock();
   function animate(){
@@ -1141,14 +1598,19 @@
 
     if(!reduceMotion){
       allRobots.forEach(rb=>{
-        if(rb.patrol){
-          const p = rb.patrol;
+        if(rb.patrolActive && rb.patrolCfg){
+          const p = rb.patrolCfg;
           const angle = t*p.speed + p.phase;
           rb.root.position.set(p.radius*Math.cos(angle), 0, p.radius*Math.sin(angle));
           /* face the direction of travel: rotation.y = atan2(dx,dz) points the
              model's local +Z (its established "front", used everywhere else
              in this scene) along the velocity vector for this circle */
           rb.root.rotation.y = Math.atan2(-Math.sin(angle), Math.cos(angle));
+        } else if(rb.homePos){
+          /* idle: stand at the stationed spot rather than drifting mid-circle
+             if this robot happened to be mid-patrol the moment it went idle */
+          rb.root.position.set(rb.homePos.x, rb.homePos.y, rb.homePos.z);
+          rb.root.rotation.y = 0;
         }
         rb.bot.position.y = Math.sin(t*2.4 + rb.phase)*0.08 + 0.08;
         if(rb.isGLTF){

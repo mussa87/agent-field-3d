@@ -1,0 +1,19 @@
+{
+  "name": "agent-field-3d-backend",
+  "version": "1.0.0",
+  "description": "Local read-only backend for agent-field-3d: surfaces real Claude Code subagent activity (filtered to agent-field-3d's own agent roster) for the Three.js visualization.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}
