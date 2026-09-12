@@ -332,7 +332,12 @@
   const scene = new THREE.Scene();
   const skyColor = 0x8ec9ee;
   scene.background = new THREE.Color(skyColor);
-  scene.fog = new THREE.Fog(skyColor, 175, 400);
+  /* far bumped 400 -> 520 for the horizon-ring city (see buildCityRing()
+     below): at maxDistance zoom-out (280) a ring point on the far side of
+     the scene can sit up to ~473 units from the camera, which the old
+     400 far distance would have faded to nothing; near/fov/color untouched
+     so the existing look is otherwise unchanged. */
+  scene.fog = new THREE.Fog(skyColor, 175, 520);
 
   const camera = new THREE.PerspectiveCamera(45, 16/9, 0.1, 900);
   const target = new THREE.Vector3(0, 7, 0);
@@ -1467,6 +1472,64 @@
   cloudPuff(140,78,-40,1.05);
   cloudPuff(-140,70,-8,0.95);
   cloudPuff(28,96,-150,0.7);
+
+  /* ---------- horizon ring: distant low-poly city skyline ----------
+     Implements the approved "Horizon Ring" concept illustration: a thin
+     ring of small, low-profile city buildings far out on the horizon,
+     fully encircling the scene and clearly separated from the central
+     hill/village by open green meadow (the terrain between the village
+     RING (47) and CITY_RING_RADIUS (205) below is left empty — only trees,
+     up to radius ~117, sit in that gap).
+     Perspective plus a deliberately modest absolute height range keeps this
+     read as atmospheric background rather than a competing subject: the
+     tallest possible city building here (8 units) stays well under every
+     village rooftop (5.2-12.5 units) and the orchestrator core's antenna
+     tip (~17 units), and CITY_RING_RADIUS (205) is ~4.4x RING (47) — so the
+     skyline is both smaller and much farther away than anything in the
+     village/hill.
+     Built the same way as grassBlades() above: a handful of
+     THREE.InstancedMesh batches (one per muted color tone) instead of one
+     mesh per building, so ~220 buildings cost only 4 draw calls. */
+  (function buildCityRing(){
+    const CITY_RING_RADIUS = 205;     // ~4.4x RING (47); comfortably inside the 460x460 terrain (half-extent 230)
+    const CITY_RING_BAND_DEPTH = 30;  // buildings scattered radius 190-220 — a thin band, not a hard circle
+    const CITY_BUILDING_COUNT = 220;  // circumference here is ~1288 units, so this reads as a near-continuous skyline with only small gaps
+    const CITY_MIN_WH = 2.5, CITY_MAX_WH = 6;  // building width/depth range (world units)
+    const CITY_MIN_H = 3, CITY_MAX_H = 8;      // building height range (world units) — see the height-safety note above
+    const CITY_COLORS = [0xada79a, 0xc9b896, 0xe3dcc9, 0x8f8a7e]; // muted warm gray / tan / warm white / slate — distinct from the village's pastel accents
+
+    const batches = CITY_COLORS.map(color=>{
+      const m = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(1,1,1),
+        new THREE.MeshStandardMaterial({color, flatShading:true, roughness:0.9}),
+        CITY_BUILDING_COUNT /* upper bound; only b.count instances (below) are actually drawn */
+      );
+      /* well outside the sun's shadow-camera frustum (±125, see sun.shadow.camera above) at this radius,
+         so shadows here would be wasted GPU work with no visible effect */
+      m.castShadow = false; m.receiveShadow = false;
+      m.count = 0;
+      scene.add(m);
+      return m;
+    });
+    const dummy = new THREE.Object3D();
+    for(let i=0;i<CITY_BUILDING_COUNT;i++){
+      const angle = (i/CITY_BUILDING_COUNT)*Math.PI*2 + (rng()-0.5)*(Math.PI*2/CITY_BUILDING_COUNT)*0.8;
+      const radius = CITY_RING_RADIUS + (rng()-0.5)*CITY_RING_BAND_DEPTH;
+      const x = radius*Math.cos(angle), z = radius*Math.sin(angle);
+      const y = heightAt(x,z);
+      const w = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
+      const d = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
+      const h = CITY_MIN_H + rng()*(CITY_MAX_H-CITY_MIN_H);
+      dummy.position.set(x, y + h/2, z);
+      dummy.rotation.set(0, rng()*Math.PI*2, 0);
+      dummy.scale.set(w, h, d);
+      dummy.updateMatrix();
+      const b = batches[i % batches.length];
+      b.setMatrixAt(b.count, dummy.matrix);
+      b.count++;
+    }
+    batches.forEach(b=>{ b.instanceMatrix.needsUpdate = true; });
+  })();
 
   /* ================= LIVE BACKEND DATA, CLICK PANEL, KPI GRID ================= */
 
