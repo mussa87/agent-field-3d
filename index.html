@@ -278,6 +278,36 @@
     return;
   }
 
+  /* ---------- busy-indicator visual style (comparison prototype) ----------
+     five interchangeable ways to show a site is "busy", picked via a URL
+     query param so each can be screenshotted without touching real backend
+     logic. 'emerge' (see applyBusyStyleEmerge() near the bottom of this
+     script) is the finalized default after comparing all five prototypes;
+     the other four (halo/window/badge/dot) are kept fully implemented and
+     selectable via ?busyStyle=... for future reference. */
+  // Busy-indicator visual style. Valid values: 'halo' | 'window' | 'badge' | 'dot' | 'emerge'
+  const BUSY_STYLE = 'emerge';
+  const EFFECTIVE_BUSY_STYLE = new URLSearchParams(location.search).get('busyStyle') || BUSY_STYLE;
+  /* debug-only override for screenshotting one specific site's busy state —
+     e.g. ?forceBusy=backend-dotnet — matched against each SITES[].name
+     below in applyBusyToScene(). Stays null (and therefore inert) unless
+     the URL param is explicitly present, so normal page loads keep using
+     only real backend data. */
+  const FORCED_BUSY_SITE = new URLSearchParams(location.search).get('forceBusy');
+  /* 'emerge' busy style tuning: how far "inside the unit" a hidden robot
+     sits while idle, as a fraction of its normal outside-the-door distance
+     (info.front, per site) — see rb.insidePos in the SITES.forEach loop and
+     applyBusyStyleEmerge() near the bottom of this script. 0.16 lands well
+     inside every building's walls (doors sit around z=3.1-3.8 while
+     info.front is 5.5-6.5) without needing per-building-shape math. */
+  const EMERGE_INSIDE_FRACTION = 0.16;
+  /* how long a full hide<->reveal tween takes, in seconds, when reduceMotion
+     is off — see the 'emerge' branch inside allRobots.forEach() in the main
+     animate() loop below. Was 0.7s; dropped to 0.4s (~1.75x faster) as part
+     of a general robot-movement speed pass — see WALK_* / patrolCfg.speed
+     comments near the top of animate() for the rest of that pass. */
+  const EMERGE_TWEEN_SECONDS = 0.4;
+
   function mulberry32(a){
     return function(){
       a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -683,18 +713,77 @@
     ctx.scale(2,2);
     ctx.font = `600 ${fontPx}px 'Segoe UI', sans-serif`;
     ctx.textBaseline = "middle";
-    roundRectPath(ctx,0,0,w,h,h/2);
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.fill();
-    ctx.fillStyle = toCss(accentHex);
-    ctx.beginPath(); ctx.arc(padX*0.6+dotR, h/2, dotR, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = "#233324";
-    ctx.fillText(text, padX*0.6+dotR*2+8, h/2+1);
+    const dotCx = padX*0.6+dotR, dotCy = h/2;
+    /* draws the whole label; `busy` only ever changes the dot (size + a
+       soft glow around it) — everything else (bg pill, text) is pixel-for-
+       pixel identical between the two calls. draw(false) below reproduces
+       the original (pre-busy-styles) rendering exactly, so idle labels are
+       unchanged; used by the 'dot' busy style (see applyBusyStyleDot() near
+       the bottom of this script) via spr.userData.setDotBusy(). */
+    function draw(busy){
+      ctx.clearRect(0,0,w,h);
+      roundRectPath(ctx,0,0,w,h,h/2);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fill();
+      ctx.fillStyle = toCss(accentHex);
+      if(busy){
+        ctx.save();
+        ctx.shadowColor = toCss(accentHex);
+        ctx.shadowBlur = dotR*1.8;
+        ctx.beginPath(); ctx.arc(dotCx, dotCy, dotR*1.6, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.beginPath(); ctx.arc(dotCx, dotCy, dotR, 0, Math.PI*2); ctx.fill();
+      }
+      ctx.fillStyle = "#233324";
+      ctx.fillText(text, padX*0.6+dotR*2+8, h/2+1);
+    }
+    draw(false);
     const tex = new THREE.CanvasTexture(c);
     tex.needsUpdate = true;
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthWrite:false}));
     const s = 0.034;
     spr.scale.set(w*s, h*s, 1);
+    spr.userData.setDotBusy = function(busy){
+      draw(busy);
+      tex.needsUpdate = true;
+    };
+    return spr;
+  }
+
+  /* ---------- 'badge' busy style: small floating icon above a site's robot,
+     built the same canvas->CanvasTexture->Sprite way as makeLabel() above.
+     Created once per site up front (see SITES.forEach below) with
+     visible=false, then toggled per-site in applyBusyStyleBadge(). ---------- */
+  function makeBusyBadgeTexture(accentHex){
+    const size = 128, cx = size/2, cy = size/2, r = size*0.42;
+    const c = document.createElement("canvas"); c.width = c.height = size;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+    /* spinner-style ring, 3/4 of the way around, hinting at ongoing work */
+    ctx.strokeStyle = toCss(accentHex);
+    ctx.lineWidth = size*0.09;
+    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.arc(cx,cy,r-ctx.lineWidth*0.7,0,Math.PI*1.5); ctx.stroke();
+    /* small bolt glyph at the center, in the site's accent color */
+    ctx.fillStyle = toCss(accentHex);
+    ctx.beginPath();
+    ctx.moveTo(cx+size*0.06, cy-size*0.22);
+    ctx.lineTo(cx-size*0.10, cy+size*0.02);
+    ctx.lineTo(cx+size*0.02, cy+size*0.02);
+    ctx.lineTo(cx-size*0.06, cy+size*0.24);
+    ctx.lineTo(cx+size*0.16, cy-size*0.06);
+    ctx.lineTo(cx+size*0.02, cy-size*0.06);
+    ctx.closePath(); ctx.fill();
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+  }
+  function makeBusyBadge(accentHex){
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:makeBusyBadgeTexture(accentHex), transparent:true, depthWrite:false}));
+    spr.scale.set(1.15,1.15,1);
+    spr.visible = false;
     return spr;
   }
 
@@ -849,7 +938,17 @@
   /* ---------- shared building parts ---------- */
   function houseWindow(x,y,z, withBox){
     const g = group(x,y,z);
-    g.add(mesh(new THREE.BoxGeometry(1.5,1.5,0.15), 0xfff1b8, {emissive:0xffdf8a, emissiveIntensity:0.35}));
+    const pane = mesh(new THREE.BoxGeometry(1.5,1.5,0.15), 0xfff1b8, {emissive:0xffdf8a, emissiveIntensity:0.35});
+    /* tagged + idle emissive stashed so the 'window' busy style (see
+       applyBusyStyleWindow() near the bottom of this script) can brighten
+       this pane toward the site's accent color when busy, and restore this
+       exact idle look when not — every other use of houseWindow() (core
+       building included) is unaffected since nothing reads these tags
+       unless EFFECTIVE_BUSY_STYLE === 'window'. */
+    pane.userData.isWindowPane = true;
+    pane.userData.idleEmissive = pane.material.emissive.getHex();
+    pane.userData.idleEmissiveIntensity = pane.material.emissiveIntensity;
+    g.add(pane);
     g.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.5,1.5,0.16)), new THREE.LineBasicMaterial({color:0x8a6a3c})));
     if(withBox !== false){
       const box = mesh(new THREE.BoxGeometry(1.9,0.4,0.5), 0x8a5a3c);
@@ -1027,7 +1126,13 @@
 
   function plainWindow(x,y,z,glow){
     const g = group(x,y,z);
-    g.add(mesh(new THREE.BoxGeometry(1.4,1.3,0.15), glow||0xdff2ff, {emissive:0xbfe3ff, emissiveIntensity:0.25}));
+    const pane = mesh(new THREE.BoxGeometry(1.4,1.3,0.15), glow||0xdff2ff, {emissive:0xbfe3ff, emissiveIntensity:0.25});
+    /* see the matching comment in houseWindow() just above — same tagging,
+       for the 'window' busy style */
+    pane.userData.isWindowPane = true;
+    pane.userData.idleEmissive = pane.material.emissive.getHex();
+    pane.userData.idleEmissiveIntensity = pane.material.emissiveIntensity;
+    g.add(pane);
     g.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.4,1.3,0.16)), new THREE.LineBasicMaterial({color:0x7c93a8})));
     return g;
   }
@@ -1116,6 +1221,13 @@
   const siteCenters = [];
   const robotBySiteIndex = [];
   const siteHaloBySiteIndex = [];
+  /* ---------- extra per-site lookups for the 'window'/'badge'/'dot' busy
+     styles (see EFFECTIVE_BUSY_STYLE near the top of this script and
+     applyBusyToScene() near the bottom) — parallel arrays, same indexing as
+     siteHaloBySiteIndex above ---------- */
+  const siteWindowPanesBySiteIndex = [];
+  const siteBadgeBySiteIndex = [];
+  const siteLabelBySiteIndex = [];
   SITES.forEach((s,i)=>{
     const theta = i * (Math.PI*2/SITES.length);
     const x = RING*Math.cos(theta), z = RING*Math.sin(theta);
@@ -1128,9 +1240,17 @@
 
     const info = s.build(site);
 
+    /* collect this site's window panes (tagged in houseWindow()/plainWindow()
+       above) for the 'window' busy style — sites built with buildPlayground/
+       buildMarket have no window meshes, so this is simply empty for those */
+    const windowPanes = [];
+    site.traverse(o=>{ if(o.userData && o.userData.isWindowPane) windowPanes.push(o); });
+    siteWindowPanesBySiteIndex.push(windowPanes);
+
     const label = makeLabel(s.name.toUpperCase(), s.accent);
     label.position.set(0, info.top+1.3, 0);
     site.add(label);
+    siteLabelBySiteIndex.push(label);
 
     /* busy-state halo, in this site's own accent color — hidden by default,
        switched on live once backend data says this agentType is busy (see
@@ -1150,6 +1270,14 @@
     robotsList.push({dot:s.accent, name:s.name});
     robotBySiteIndex.push(rb);
 
+    /* 'badge' busy style: one small floating icon per site, added as a
+       child of the robot's root (so it follows the robot during patrol),
+       hidden by default and toggled per-site in applyBusyStyleBadge() */
+    const badge = makeBusyBadge(s.accent);
+    badge.position.set(0, 4.6, 0);
+    rb.root.add(badge);
+    siteBadgeBySiteIndex.push(badge);
+
     /* every site's robot carries a patrol config — whether it's actually
        USED each frame is decided live from real backend activity alone, in
        applyBusyToScene() near the end of this script (there is no static
@@ -1158,8 +1286,31 @@
        agent — tester included — starts idle here and only patrols once the
        live backend says that agent type is actually busy). */
     rb.homePos = {x:0.9, y:0, z:info.front};
-    rb.patrolCfg = { radius: Math.min(5.4, info.front-0.6), speed: 0.28, phase: rng()*Math.PI*2 };
+    /* speed was 0.28 rad/s; bumped to 0.5 (~1.8x) as part of a general
+       robot-movement speed pass — see EMERGE_TWEEN_SECONDS and the WALK_*
+       constants near animate() for the rest of that pass */
+    rb.patrolCfg = { radius: Math.min(5.4, info.front-0.6), speed: 0.5, phase: rng()*Math.PI*2 };
     rb.patrolActive = false; /* overridden live once backend data connects — see applyBusyToScene() */
+
+    /* 'emerge' busy style state — see EMERGE_INSIDE_FRACTION near the top of
+       this script, applyBusyStyleEmerge() near the bottom, and the 'emerge'
+       branch inside the main animate() loop's allRobots.forEach(). Set
+       unconditionally (cheap, inert data) so nothing else has to special-case
+       whether this style is active; only rb.root.visible below is actually
+       guarded, since flipping that for any OTHER style would wrongly hide a
+       robot that style never expects to be hidden. */
+    rb.insidePos = {x: rb.homePos.x, y: rb.homePos.y, z: rb.homePos.z * EMERGE_INSIDE_FRACTION};
+    rb.emergeT = 0;            // 0 = hidden inside, 1 = fully emerged outside
+    rb.emergeTarget = 0;
+    rb.emergeRevealActive = false; // true while a click-triggered temporary reveal is counting down
+    rb.emergeRevealTimer = null;
+    if(EFFECTIVE_BUSY_STYLE === "emerge"){
+      /* start hidden; the applyBusyToScene() call made once real/forced busy
+         state is known (right after this SITES.forEach loop, and again on
+         every live update) corrects this to the real per-site state before
+         the very first frame is ever painted */
+      rb.root.visible = false;
+    }
 
     /* stepping-stone spoke path from the plaza edge to this site's entrance —
        a gentle bow rather than a straight radial line, so it reads as a
@@ -1243,7 +1394,9 @@
   core.add(coreRobot.root);
   replaceRobotMesh(coreRobot, "models/hero-robot.json", 4.6);
   coreRobot.homePos = {x:-1.4, y:0, z:9.5};
-  coreRobot.patrolCfg = { radius: 4.5, speed: 0.22, phase: rng()*Math.PI*2 };
+  /* speed was 0.22 rad/s; bumped to 0.4 (~1.8x), matching the site-robot
+     speed bump just above (see rb.patrolCfg in the SITES.forEach loop) */
+  coreRobot.patrolCfg = { radius: 4.5, speed: 0.4, phase: rng()*Math.PI*2 };
   coreRobot.patrolActive = false; /* overridden live once backend data connects — see applyBusyToScene() */
 
   const droneRoot = group(-3.0, 5.2, 9.0);
@@ -1363,9 +1516,8 @@
 
   /* ---------- push live/offline state onto the 3D scene ---------- */
   function applyBusyToScene(){
-    SITES.forEach((s,i)=>{
+    const busyBySiteIndex = SITES.map((s,i)=>{
       const rb = robotBySiteIndex[i];
-      const halo = siteHaloBySiteIndex[i];
       let busy;
       if(!backendReachable){
         /* backend never reachable (or no longer reachable) this session —
@@ -1379,8 +1531,12 @@
         const agentsOfType = lastPayload.agents.filter(a=>a.agentType===s.name);
         busy = typeIsBusy(ts, agentsOfType);
       }
+      /* debug-only screenshot override (see FORCED_BUSY_SITE near the top of
+         this script) — a no-op, and this line has zero effect on `busy`,
+         whenever the `forceBusy` URL param is absent */
+      if(FORCED_BUSY_SITE && s.name === FORCED_BUSY_SITE) busy = true;
       if(rb) rb.patrolActive = busy;
-      if(halo) halo.visible = busy;
+      return busy;
     });
     let coreBusy = false;
     if(backendReachable){
@@ -1389,7 +1545,131 @@
       coreBusy = typeIsBusy(ts, agentsOfType);
     }
     coreRobot.patrolActive = coreBusy;
+
+    /* dispatch to exactly one busy-indicator visual style — see
+       EFFECTIVE_BUSY_STYLE near the top of this script. Only 'halo' is ever
+       used on a normal, no-query-param page load. */
+    if(EFFECTIVE_BUSY_STYLE === "window"){
+      applyBusyStyleWindow(busyBySiteIndex);
+    } else if(EFFECTIVE_BUSY_STYLE === "badge"){
+      applyBusyStyleBadge(busyBySiteIndex);
+    } else if(EFFECTIVE_BUSY_STYLE === "dot"){
+      applyBusyStyleDot(busyBySiteIndex);
+    } else if(EFFECTIVE_BUSY_STYLE === "emerge"){
+      applyBusyStyleEmerge(busyBySiteIndex);
+    } else {
+      applyBusyStyleHalo(busyBySiteIndex, coreBusy);
+    }
+  }
+
+  /* ---------- 'halo' busy style (default/original) — a colored ground-ring
+     under each busy site's unit, plus the orchestrator core's own ring.
+     This is the exact original applyBusyToScene() per-site/per-core halo
+     toggle logic, unchanged, just moved into its own function so it can be
+     gated behind EFFECTIVE_BUSY_STYLE === 'halo' above. ---------- */
+  function applyBusyStyleHalo(busyBySiteIndex, coreBusy){
+    SITES.forEach((s,i)=>{
+      const halo = siteHaloBySiteIndex[i];
+      if(halo) halo.visible = busyBySiteIndex[i];
+    });
     coreBusyHalo.visible = coreBusy;
+  }
+
+  /* ---------- 'window' busy style — brightens a busy site's own window
+     pane(s) toward its accent color ("office light is on"); restores the
+     exact idle emissive look when not busy. Sites with no window meshes
+     (buildPlayground/buildMarket) simply have nothing to toggle. ---------- */
+  function applyBusyStyleWindow(busyBySiteIndex){
+    SITES.forEach((s,i)=>{
+      const panes = siteWindowPanesBySiteIndex[i];
+      if(!panes || !panes.length) return;
+      const busy = busyBySiteIndex[i];
+      panes.forEach(pane=>{
+        if(busy){
+          pane.material.emissive.setHex(s.accent);
+          pane.material.emissiveIntensity = 1.15;
+        } else {
+          pane.material.emissive.setHex(pane.userData.idleEmissive);
+          pane.material.emissiveIntensity = pane.userData.idleEmissiveIntensity;
+        }
+      });
+    });
+  }
+
+  /* ---------- 'badge' busy style — a small floating icon above a site's
+     robot, visible only while that site is busy (see makeBusyBadge() /
+     siteBadgeBySiteIndex above). ---------- */
+  function applyBusyStyleBadge(busyBySiteIndex){
+    SITES.forEach((s,i)=>{
+      const badge = siteBadgeBySiteIndex[i];
+      if(badge) badge.visible = busyBySiteIndex[i];
+    });
+  }
+
+  /* ---------- 'dot' busy style — reuses the small accent dot already drawn
+     as part of each site's label sprite (see makeLabel()'s
+     spr.userData.setDotBusy above): bigger + a soft glow when busy, restored
+     to its original small/plain look when not. Nothing else about the label
+     changes. ---------- */
+  function applyBusyStyleDot(busyBySiteIndex){
+    SITES.forEach((s,i)=>{
+      const label = siteLabelBySiteIndex[i];
+      if(label && label.userData.setDotBusy) label.userData.setDotBusy(busyBySiteIndex[i]);
+    });
+  }
+
+  /* ---------- 'emerge' busy style — each site's robot hides inside its unit
+     while idle, and walks/tweens out to its normal stationed spot (see
+     rb.homePos) when that site becomes busy, or when its building is clicked
+     (see revealRobotOnClick() just below — that's the "or check recent
+     history" trigger). It walks back in and disappears once idle again
+     (immediately for a real busy->idle transition; after a few seconds for a
+     click-triggered reveal, via rb.emergeRevealActive/rb.emergeRevealTimer).
+
+     This function only ever sets the *target* (rb.emergeTarget, 0 = hidden
+     inside via rb.insidePos, 1 = fully emerged at rb.homePos) plus an instant
+     snap for the reduceMotion case. The actual per-frame tween of rb.emergeT
+     toward that target — and the position/visibility it drives — happens in
+     the 'emerge' branch inside allRobots.forEach() in the main animate()
+     loop near the bottom of this script, since reduceMotion completely skips
+     that loop's robot-position code (by design, for that setting) and so
+     can't be relied on to ever run at all. ---------- */
+  function applyBusyStyleEmerge(busyBySiteIndex){
+    SITES.forEach((s,i)=>{
+      const rb = robotBySiteIndex[i];
+      if(!rb || !rb.insidePos) return;
+      const busy = busyBySiteIndex[i];
+      rb.emergeTarget = (busy || rb.emergeRevealActive) ? 1 : 0;
+      if(reduceMotion){
+        rb.emergeT = rb.emergeTarget;
+        const p = rb.emergeTarget ? rb.homePos : rb.insidePos;
+        rb.root.position.set(p.x, p.y, p.z);
+        rb.root.rotation.y = 0;
+        rb.root.visible = rb.emergeTarget > 0;
+      }
+    });
+  }
+
+  /* click-triggered temporary reveal for the 'emerge' style (see
+     applyBusyStyleEmerge() just above): called from the site-panel click
+     handler below regardless of which busy style is active — a deliberate
+     no-op whenever 'emerge' isn't the active style, since every other style
+     already keeps its robot visible all the time and has nothing to reveal. */
+  function revealRobotOnClick(siteIndex){
+    if(EFFECTIVE_BUSY_STYLE !== "emerge") return;
+    const rb = robotBySiteIndex[siteIndex];
+    if(!rb || !rb.insidePos) return;
+    rb.emergeRevealActive = true;
+    if(rb.emergeRevealTimer) clearTimeout(rb.emergeRevealTimer);
+    rb.emergeRevealTimer = setTimeout(()=>{
+      rb.emergeRevealTimer = null;
+      rb.emergeRevealActive = false;
+      /* re-hides it only if still idle by now (applyBusyStyleEmerge() above
+         keeps rb.emergeTarget at 1 regardless, if this site turned busy
+         while the reveal was counting down) */
+      applyBusyToScene();
+    }, 5000);
+    applyBusyToScene(); // reveal immediately
   }
 
   function escapeHtml(str){
@@ -1540,7 +1820,11 @@
       while(obj){
         if(obj.userData){
           if(obj.userData.isCore){ openSitePanel("orchestrator"); return; }
-          if(typeof obj.userData.siteIndex === "number"){ openSitePanel(SITES[obj.userData.siteIndex].name); return; }
+          if(typeof obj.userData.siteIndex === "number"){
+            revealRobotOnClick(obj.userData.siteIndex); /* 'emerge' style only — a no-op under every other busy style */
+            openSitePanel(SITES[obj.userData.siteIndex].name);
+            return;
+          }
         }
         obj = obj.parent;
       }
@@ -1622,16 +1906,93 @@
   applyBusyToScene();
   renderKPI();
 
+  /* ---------- walk-cycle approximation, used while a robot is actually
+     translating (patrol orbit, or a mid walk-out/walk-back tween during the
+     'emerge' busy style) ----------
+     Neither shipped glTF model embeds a skeleton or AnimationClip: parsing
+     models/chibi-robot.json / models/hero-robot.json's glTF JSON chunk
+     directly shows both 'skins' and 'animations' are absent, and each has
+     exactly one static mesh node ("Robot" / "Armored Character") — so a
+     rigged walk-cycle via THREE.AnimationMixer isn't available for the
+     loaded model, which is what every robot ends up using once its
+     replaceRobotMesh() fetch succeeds (the common case). The procedural
+     fallback robot (used only if that load fails, or before it settles)
+     doesn't have a real jointed leg either — legL/legR and their boots are
+     separate, non-hip-pivoted siblings under `bot`, so rotating a leg mesh
+     directly would pop its boot loose and gap the hip rather than read as a
+     step. So both cases get the same honest approximation instead: drive the
+     whole `rb.bot` group (present either way) with a small bob + forward
+     lean + side-to-side sway, cadence tied to each robot's actual
+     translation speed via walkRateFor() below, so it reads as footsteps
+     rather than a rigid glide. Applied inside the same `if(!reduceMotion)`
+     guard as every other per-frame animation below, so it's automatically
+     skipped for users with that preference set. */
+  const WALK_STEP_BASE_RATE = 7;   // rad/s the walk-cycle phase advances at WALK_REF_LIN_SPEED
+  const WALK_REF_LIN_SPEED = 2;    // world units/sec ~ a typical patrol orbit's tangential speed, post speed-bump
+  const WALK_RATE_MIN_MULT = 0.7, WALK_RATE_MAX_MULT = 1.6; // clamps so the much-quicker 'emerge' dash speeds steps up without them spinning
+  const WALK_BOB_AMPLITUDE = 0.22; // vertical bounce (world units) — abs(sin) gives a double-bounce per stride
+  const WALK_LEAN_BASE = 0.07, WALK_LEAN_WOBBLE = 0.03; // forward pitch (rad) while moving, plus a small per-footfall wobble
+  const WALK_SWAY_AMOUNT = 0.07;   // side-to-side roll (rad), one full left/right cycle per stride
+  const WALK_EASE_RATE = 7;        // how fast lean/sway ease toward their per-frame target (and back to rest when idle)
+  function walkRateFor(linSpeed){
+    const mult = Math.min(WALK_RATE_MAX_MULT, Math.max(WALK_RATE_MIN_MULT, linSpeed/WALK_REF_LIN_SPEED));
+    return WALK_STEP_BASE_RATE * mult;
+  }
+
   /* ---------- animation loop ---------- */
   const clock = new THREE.Clock();
+  let lastFrameT = 0; /* previous frame's clock.getElapsedTime(), used only to derive a per-frame
+                          delta below for the 'emerge' busy style's tween (see EMERGE_TWEEN_SECONDS
+                          near the top of this script) — deliberately NOT clock.getDelta(), since
+                          getElapsedTime() already consumes that internally each frame and calling
+                          it again here would double-consume it */
   function animate(){
     requestAnimationFrame(animate);
     const t = clock.getElapsedTime();
+    const dt = Math.max(0, t - lastFrameT);
+    lastFrameT = t;
     controls.update();
 
     if(!reduceMotion){
       allRobots.forEach(rb=>{
-        if(rb.patrolActive && rb.patrolCfg){
+        let moving = false, linSpeed = 0; // set below whenever this robot actually translates this frame; drives the walk-cycle just after this if/else chain
+        if(EFFECTIVE_BUSY_STYLE === "emerge" && rb.insidePos){
+          /* 'emerge' busy style: tween rb.emergeT (0 = hidden inside the
+             unit, 1 = fully emerged/outside) toward rb.emergeTarget (set in
+             applyBusyStyleEmerge()/revealRobotOnClick()) over
+             EMERGE_TWEEN_SECONDS. The reduceMotion instant-snap case is
+             handled directly in applyBusyStyleEmerge() instead, since this
+             whole per-frame loop doesn't run at all when reduceMotion is on. */
+          const emergeRate = 1/EMERGE_TWEEN_SECONDS;
+          const wasTweening = rb.emergeT !== rb.emergeTarget; // captured before this frame's step, i.e. "is it actually walking during this frame's interpolation below"
+          if(rb.emergeT < rb.emergeTarget) rb.emergeT = Math.min(rb.emergeTarget, rb.emergeT + emergeRate*dt);
+          else if(rb.emergeT > rb.emergeTarget) rb.emergeT = Math.max(rb.emergeTarget, rb.emergeT - emergeRate*dt);
+          rb.root.visible = rb.emergeT > 0.001;
+          if(rb.patrolActive && rb.patrolCfg && rb.emergeT >= 1){
+            /* fully emerged and busy: patrol exactly like every other busy style */
+            const p = rb.patrolCfg;
+            const angle = t*p.speed + p.phase;
+            rb.root.position.set(p.radius*Math.cos(angle), 0, p.radius*Math.sin(angle));
+            rb.root.rotation.y = Math.atan2(-Math.sin(angle), Math.cos(angle));
+            moving = true;
+            linSpeed = p.radius*p.speed;
+          } else {
+            /* mid walk-out/walk-back tween, emerged-but-idle (click reveal),
+               or fully hidden: interpolate straight between rb.insidePos and
+               rb.homePos */
+            rb.root.position.set(
+              rb.insidePos.x + (rb.homePos.x - rb.insidePos.x)*rb.emergeT,
+              rb.homePos.y,
+              rb.insidePos.z + (rb.homePos.z - rb.insidePos.z)*rb.emergeT
+            );
+            rb.root.rotation.y = 0;
+            if(wasTweening){
+              moving = true;
+              const dx = rb.homePos.x - rb.insidePos.x, dz = rb.homePos.z - rb.insidePos.z;
+              linSpeed = Math.hypot(dx, dz)/EMERGE_TWEEN_SECONDS;
+            }
+          }
+        } else if(rb.patrolActive && rb.patrolCfg){
           const p = rb.patrolCfg;
           const angle = t*p.speed + p.phase;
           rb.root.position.set(p.radius*Math.cos(angle), 0, p.radius*Math.sin(angle));
@@ -1639,13 +2000,34 @@
              model's local +Z (its established "front", used everywhere else
              in this scene) along the velocity vector for this circle */
           rb.root.rotation.y = Math.atan2(-Math.sin(angle), Math.cos(angle));
+          moving = true;
+          linSpeed = p.radius*p.speed;
         } else if(rb.homePos){
           /* idle: stand at the stationed spot rather than drifting mid-circle
              if this robot happened to be mid-patrol the moment it went idle */
           rb.root.position.set(rb.homePos.x, rb.homePos.y, rb.homePos.z);
           rb.root.rotation.y = 0;
         }
-        rb.bot.position.y = Math.sin(t*2.4 + rb.phase)*0.08 + 0.08;
+
+        /* walk-cycle approximation (bob/forward lean/side sway) — see the
+           WALK_* constants and comment above animate() for why this is a
+           procedural approximation rather than a rigged AnimationMixer clip.
+           Only engages while `moving` is true; otherwise it eases back to
+           rest and falls back to the original idle "breathing" bob, so a
+           stationary robot looks exactly as it did before this change. */
+        if(moving){
+          rb.walkPhase = (rb.walkPhase||0) + dt*walkRateFor(linSpeed);
+          rb.bot.position.y = Math.abs(Math.sin(rb.walkPhase))*WALK_BOB_AMPLITUDE;
+          const leanTarget = WALK_LEAN_BASE + Math.sin(rb.walkPhase*2)*WALK_LEAN_WOBBLE;
+          const swayTarget = Math.sin(rb.walkPhase)*WALK_SWAY_AMOUNT;
+          rb.bot.rotation.x += (leanTarget - rb.bot.rotation.x)*Math.min(1, dt*WALK_EASE_RATE);
+          rb.bot.rotation.z += (swayTarget - rb.bot.rotation.z)*Math.min(1, dt*WALK_EASE_RATE);
+        } else {
+          rb.bot.position.y = Math.sin(t*2.4 + rb.phase)*0.08 + 0.08;
+          rb.bot.rotation.x += (0 - rb.bot.rotation.x)*Math.min(1, dt*WALK_EASE_RATE);
+          rb.bot.rotation.z += (0 - rb.bot.rotation.z)*Math.min(1, dt*WALK_EASE_RATE);
+        }
+
         if(rb.isGLTF){
           /* no rig on the loaded model, so a slow idle sway stands in for the
              procedural placeholder's arm-wave */
@@ -1659,6 +2041,12 @@
       coreAntennaTip.material.emissiveIntensity = 0.6 + Math.sin(t*2.1)*0.4;
       coreAntennaTip2.material.emissiveIntensity = 0.6 + Math.sin(t*2.6+1)*0.4;
       hubGlow.material.opacity = 0.12 + Math.sin(t*1.1)*0.05;
+
+      /* 'badge' busy style: a slow continuous spin on each badge sprite for
+         a subtle "working" feel — cheap enough to run unconditionally even
+         when EFFECTIVE_BUSY_STYLE isn't 'badge' (badges are simply hidden
+         then, via .visible, so this has no visible effect in that case) */
+      siteBadgeBySiteIndex.forEach(b=>{ if(b) b.material.rotation = t*1.3; });
 
       scene.traverse(o=>{
         if(o.userData && typeof o.userData.smokeDelay === "number"){
