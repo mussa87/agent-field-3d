@@ -181,8 +181,12 @@
   .sitepanel-meta{font-size:11px;color:var(--ink-dim);margin:0 0 10px;}
   .sitepanel-entry{padding:8px 0;border-top:1px solid var(--panel-line);}
   .sitepanel-entry:first-child{border-top:none;padding-top:0;}
-  .sitepanel-entry-desc{font-size:12px;color:#233324;line-height:1.4;}
-  .sitepanel-entry-meta{font-size:10.5px;color:var(--ink-dim);margin-top:3px;}
+  .sitepanel-request-text{font-size:12px;font-weight:700;color:#233324;line-height:1.4;white-space:pre-wrap;}
+  .sitepanel-response-text{display:block;font-size:11.5px;color:#3a4a38;line-height:1.45;margin-top:4px;white-space:pre-wrap;}
+  .sitepanel-response-toggle{display:inline-block;margin-top:2px;font:inherit;font-size:10.5px;font-weight:600;color:var(--mint);background:none;border:none;padding:0;cursor:pointer;text-decoration:underline;}
+  .sitepanel-response-toggle:hover{color:#1f8a5f;}
+  .sitepanel-response-toggle:focus-visible{outline:2px solid var(--mint);outline-offset:2px;}
+  .sitepanel-entry-meta{font-size:10.5px;color:var(--ink-dim);margin-top:5px;}
   .sitepanel-empty{font-size:12px;color:var(--ink-dim);margin:0;}
   .backendmeta{
     font-size:11.5px;
@@ -1792,6 +1796,13 @@
   const sitepanelTitleEl = document.getElementById("sitepanelTitle");
   const sitepanelMetaEl = document.getElementById("sitepanelMeta");
   const sitepanelListEl = document.getElementById("sitepanelList");
+  /* the backend's /api/agents `requests[].responseText` is returned FULL
+     LENGTH, untruncated (see backend/server.js's parseSessionTurns()
+     comment) — this is a client-side-only preview length, so "Show more"
+     always has the complete verbatim text to expand into. requestText is
+     shown in full up front (never truncated) per this feature's spec. */
+  const RESPONSE_PREVIEW_CHARS = 320;
+  let currentPanelRequests = []; // the `requests` array behind the currently-rendered panel, indexed by the buttons' data-index
   function openSitePanel(type){
     currentPanelType = type;
     renderSitePanel();
@@ -1811,7 +1822,6 @@
     const accent = accentByType[type] != null ? accentByType[type] : 0x8a8a8a;
     sitepanelTitleEl.innerHTML = `<span class="dot" style="background:${toCss(accent)}"></span>${escapeHtml(titleCaseSlug(type))}`;
     const ts = lastPayload ? lastPayload.agentTypes.find(t=>t.agentType===type) : null;
-    const agentsOfType = lastPayload ? lastPayload.agents.filter(a=>a.agentType===type) : [];
     if(!backendReachable){
       sitepanelMetaEl.textContent = "Live backend unreachable — showing no data.";
     } else if(ts){
@@ -1819,22 +1829,57 @@
     } else {
       sitepanelMetaEl.textContent = "";
     }
-    const relevant = agentsOfType.filter(isEntryActiveOrRecent)
-      .sort((a,b)=> new Date(b.lastActivityAt||0) - new Date(a.lastActivityAt||0));
+    /* each request is the user's verbatim message + Claude's final verbatim
+       response for it (duplicated across every agent-type card that
+       request's work touched — see backend/server.js's getRequestsByType()
+       comment) rather than the raw internal subagent "process" rows this
+       panel used to show. */
+    const requests = (ts && Array.isArray(ts.requests)) ? ts.requests : [];
+    currentPanelRequests = requests;
     if(!backendReachable){
       sitepanelListEl.innerHTML = `<p class="sitepanel-empty">No live connection to the agent backend right now.</p>`;
-    } else if(relevant.length === 0){
+    } else if(requests.length === 0){
       sitepanelListEl.innerHTML = `<p class="sitepanel-empty">${(ts && ts.total > 0) ? "No active or recent activity for this agent right now." : "No recorded activity for this agent yet."}</p>`;
     } else {
-      sitepanelListEl.innerHTML = relevant.map(a=>{
-        const src = [a.source && a.source.client, a.source && a.source.project].filter(Boolean).join(" · ") || "unknown source";
+      sitepanelListEl.innerHTML = requests.map((r,i)=>{
+        const full = r.responseText || "";
+        const isLong = full.length > RESPONSE_PREVIEW_CHARS;
+        const preview = isLong ? full.slice(0, RESPONSE_PREVIEW_CHARS) + "…" : full;
+        const responseHtml = full
+          ? `<span class="sitepanel-response-text">${escapeHtml(preview)}</span>` +
+            (isLong ? `<button class="sitepanel-response-toggle" type="button" data-index="${i}" data-expanded="false">Show more</button>` : "")
+          : `<span class="sitepanel-response-text"><em>(no response text)</em></span>`;
         return `<div class="sitepanel-entry">` +
-          `<div class="sitepanel-entry-desc">${escapeHtml(a.description || "(no description)")}</div>` +
-          `<div class="sitepanel-entry-meta">${escapeHtml(src)} · started ${escapeHtml(relativeTime(a.startedAt))} · ${escapeHtml(a.status || "unknown")}</div>` +
+          `<div class="sitepanel-request-text">${escapeHtml(r.requestText || "(no request text)")}</div>` +
+          responseHtml +
+          `<div class="sitepanel-entry-meta">responded ${escapeHtml(relativeTime(r.respondedAt))}</div>` +
         `</div>`;
       }).join("");
     }
   }
+  /* expand/collapse a truncated response preview to its full verbatim text
+     (event delegation, since sitepanelListEl's innerHTML is fully rebuilt
+     on every render — see renderSitePanel() above). Uses textContent (never
+     innerHTML) for the actual text so nothing here re-parses user/assistant
+     text as HTML. */
+  sitepanelListEl.addEventListener("click", (e)=>{
+    const btn = e.target.closest(".sitepanel-response-toggle");
+    if(!btn) return;
+    const r = currentPanelRequests[Number(btn.getAttribute("data-index"))];
+    if(!r) return;
+    const textEl = btn.previousElementSibling;
+    const full = r.responseText || "";
+    const expanded = btn.getAttribute("data-expanded") === "true";
+    if(expanded){
+      textEl.textContent = full.slice(0, RESPONSE_PREVIEW_CHARS) + "…";
+      btn.textContent = "Show more";
+      btn.setAttribute("data-expanded", "false");
+    } else {
+      textEl.textContent = full;
+      btn.textContent = "Show less";
+      btn.setAttribute("data-expanded", "true");
+    }
+  });
   const sitepanelCloseBtn = document.getElementById("sitepanelClose");
   if(sitepanelCloseBtn) sitepanelCloseBtn.addEventListener("click", closeSitePanel);
   /* dismissal: Escape, or a pointerdown anywhere outside the panel (and
