@@ -512,11 +512,24 @@
 
   function tintModelMeshes(obj, tintColor){
     const tint = new THREE.Color(tintColor);
-    const blend = 0.35;
+    // bumped from 0.35: at 35% the accent was imperceptible against this model's
+    // near-black base albedo (confirmed via live screenshot), so blend most of the
+    // way to the accent color while still reading as a blend, not a flat override
+    const blend = 0.88;
     obj.traverse(o=>{
       if(o.isMesh && o.material){
         const mats = Array.isArray(o.material) ? o.material : [o.material];
-        mats.forEach(m=>{ if(m && m.color) m.color.lerp(tint, blend); });
+        mats.forEach(m=>{
+          if(m && m.color) m.color.lerp(tint, blend);
+          // a near-black base albedo stays dim even after a strong color blend,
+          // since albedo only scales reflected light; MeshStandardMaterial /
+          // MeshPhongMaterial also expose `emissive` (MeshBasicMaterial does not,
+          // hence the feature check via `m.emissive`), which adds light independent
+          // of scene lighting — nudge a small, modest fraction of the accent into
+          // emissive so the tint reads clearly without making the mesh glow like a
+          // lightbulb
+          if(m && m.emissive) m.emissive.lerp(tint, 0.12);
+        });
       }
     });
   }
