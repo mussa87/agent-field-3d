@@ -1662,6 +1662,25 @@
 
      ---- net batch/texture count: see the comments at the end of
      buildCityRing() below for the final tallies. ---- */
+
+  /* ---------- road-network geometry fix (new, follow-up to the texture pass documented just
+     above) ----------
+     Both passes above still describe roads/sidewalks as independent per-segment InstancedMesh
+     boxes (roadBatch/sidewalkBatch/roadSegCount, each segment built by its own placeRoadSegment()
+     call) -- that description is now HISTORICAL. Screenshots after the texture pass showed the
+     ring/spoke network rendering as disconnected trapezoid-ish fragments at inconsistent angles
+     instead of a connected grid: every independent box sampled heightAt() once at its own
+     midpoint and sat flat at that single height for its whole length, so two boxes meant to share
+     an endpoint (a ring-chord joint, or a lane boundary along a spoke) almost never agreed on
+     that point's real height, since CITY_INNER_R (100) is already past FLAT_R+FLAT_BLEND (78) and
+     so sits on the full rolling terrain rather than a flat plateau. This pass replaces that
+     per-segment-box approach with two continuous, shared-vertex ribbon meshes (see
+     buildRingRibbon()/buildSpokeRibbon() below) -- roadBatch/sidewalkBatch/roadLineBatch and
+     placeRoadSegment() no longer exist; read the doc comment directly above buildRingRibbon()/
+     buildSpokeRibbon() inside buildCityRing() below for the full root-cause writeup and the fix
+     itself. crosswalkBatch is unchanged (still one small InstancedMesh of standalone boxes,
+     unaffected by the joint-height bug since each crosswalk is a single box, not a chain). */
+
   (function buildCityRing(){
     const CITY_INNER_R = 100;   // see terrain-safety derivation above (78 + 22-unit buffer)
     const CITY_OUTER_R = 160;
@@ -1676,11 +1695,10 @@
     // texture-pass doc comment above)
     const ROAD_COLOR = 0x6b6b66;          // asphalt gray — now baked directly into the shared road canvas texture below (see makeRoadSurfaceTexture()), with the material's own `color` left white so the canvas defines the visible tone directly, same convention as the archetype body textures
     const ROAD_WIDTH = 4.5;               // was 2.4 — widened so the streets read as real roads, not thin lines
-    const ROAD_THICK = 0.08;              // road strip thickness (kept thin/flat)
+    const ROAD_THICK = 0.08;              // still used by the crosswalk InstancedMesh boxes below (see makeCrosswalkTexture()'s batch); the ring/spoke road surface itself is now a flat (zero-thickness) ribbon mesh, so this no longer sets its extrusion — see the buildCityRing() road-ribbon doc comment for why
     const ROAD_Y_LIFT = 0.05;             // lifted slightly above heightAt() to avoid z-fighting with the terrain mesh
     const ROAD_ARC_SUBDIV = 3;            // chord segments per sector per ring road, so curved ring roads hug the rolling terrain instead of one long flat chord
     const SIDEWALK_WIDTH = 1.1;           // sidewalk/curb strip width (world units), placed on both sides of every road segment
-    const SIDEWALK_THICK = ROAD_THICK*1.6; // slightly thicker than the road surface so it reads as a curb step-up
     const SIDEWALK_Y_LIFT = ROAD_Y_LIFT + 0.02;  // sits a hair above the road surface, avoiding z-fighting
     const SIDEWALK_GAP = 0.05;            // small clear gap outside the road's own painted edge line before the sidewalk starts
     const CROSSWALK_DEPTH = 1.6;          // crosswalk strip depth along the direction of travel (its short axis)
@@ -1754,17 +1772,16 @@
     pitchRoofGeo.rotateY(Math.PI/4); // baked 45deg twist, same trick buildHouse()/buildSchool() use on their own ConeGeometry roofs, so the instance's own rotation.y still lines the roof up with its body footprint
     const pitchRoofBatch = makeAccentBatch(pitchRoofGeo, CITY_PITCH_ROOF_TONE, {roughness:0.75});
 
-    const roadSegCount = CITY_SECTORS*ROAD_ARC_SUBDIV*(CITY_LANES+1) /* ring roads */ + CITY_SECTORS*CITY_LANES /* spoke roads */;
-
     /* ---- Part 2 of the texture pass: procedural road/sidewalk/crosswalk textures — 3 more canvas
        textures (7 total for the whole city+roads system), each generated once and shared via its
        batch's material.map (see the texture-pass doc comment above). ---- */
     const ROAD_MARKING_TONE = 0xd9d3bd; // pale, muted marking tone carried over from the previous pass's stripe color
 
     function makeRoadSurfaceTexture(){
-      // canvas x = along the road's length (u, repeats via texture.repeat.x below so the dash
-      // pattern continues down whatever segment length uses it); canvas y = across the road's
-      // width (v, never repeated — a segment's local z always spans exactly one ROAD_WIDTH)
+      // canvas x = along the road's length (u, repeats via the ribbon's own per-vertex arc-length
+      // UVs below so the dash pattern continues seamlessly down the whole ring/spoke); canvas y =
+      // across the road's width (v, never repeated — a segment's local z always spans exactly one
+      // ROAD_WIDTH)
       const w = 256, h = 128;
       const c = document.createElement("canvas"); c.width = w; c.height = h;
       const ctx = c.getContext("2d");
@@ -1777,15 +1794,17 @@
       for(let dx=0; dx<w; dx+=dashW+dashGap){ ctx.fillRect(dx, midY, dashW, dashThick); } // dashed center line, tiles seamlessly at the canvas's own width
       const tex = new THREE.CanvasTexture(c);
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(3, 1); // repeats along length only; approximate across ring-chord vs spoke segments' differing lengths — same shared-material tradeoff as the building textures above
+      // NOTE: repeat is left at the default (1,1) — the old per-instance approximation
+      // ("repeat.set(3,1)" applied identically to every independent box no matter its real length)
+      // is retired now that roads are continuous ribbons (see buildRingRibbon/buildSpokeRibbon
+      // below), which instead derive each vertex's own u from real accumulated arc length /
+      // ROAD_UV_TILE, so dash spacing is consistent world-units-per-dash along the whole ring or
+      // spoke instead of "the same repeat count no matter how long the run actually is".
       tex.needsUpdate = true;
       return tex;
     }
     const roadTex = makeRoadSurfaceTexture();
-    const roadBatch = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({color:0xffffff, map:roadTex, flatShading:true, roughness:0.95}), roadSegCount);
-    roadBatch.castShadow = false; roadBatch.receiveShadow = true; // see shadow note above
-    roadBatch.count = 0;
-    scene.add(roadBatch);
+    const roadMat = new THREE.MeshStandardMaterial({color:0xffffff, map:roadTex, flatShading:true, roughness:0.95, side:THREE.DoubleSide});
 
     function makePaverTexture(){
       // same length-repeats-only convention as the road texture above; unlike the road/building
@@ -1805,15 +1824,13 @@
       }
       const tex = new THREE.CanvasTexture(c);
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(4, 1);
+      // see the matching note on makeRoadSurfaceTexture() above — repeat left at the default (1,1);
+      // the sidewalk ribbons below derive their own u from real arc length / SIDEWALK_UV_TILE instead.
       tex.needsUpdate = true;
       return tex;
     }
     const paverTex = makePaverTexture();
-    const sidewalkBatch = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({color:0xffffff, map:paverTex, flatShading:true, roughness:0.9}), roadSegCount*2);
-    sidewalkBatch.castShadow = false; sidewalkBatch.receiveShadow = true; // see shadow note above
-    sidewalkBatch.count = 0;
-    scene.add(sidewalkBatch);
+    const sidewalkMat = new THREE.MeshStandardMaterial({color:0xffffff, map:paverTex, flatShading:true, roughness:0.9, side:THREE.DoubleSide});
 
     function makeCrosswalkTexture(){
       // canvas x = across the road's width (u, uniform — every bar spans the full crossing width);
@@ -1910,62 +1927,132 @@
     // (roofCapBatch/awningBatch/doorBatch/pitchRoofBatch) — the retired windowBandBatch's slot was
     // reused by the new steppedTopBodyBatch split, so the total count didn't grow.
 
-    /* ---- roads: one thin box per segment (its asphalt+lane-marking texture
-       baked in — see makeRoadSurfaceTexture() above; the old separate
-       geometric center-line stripe box is retired now that the texture
-       bakes that detail in directly), plus a paver-textured sidewalk strip
-       on each side, individually height-sampled and rotated to align with
-       its own direction. For a box scaled along its local +X axis,
-       rotation.y = atan2(-dz,dx) aligns that local +X axis with a
-       world-space direction (dx,dz) — verified against the identity cases
-       (dx=1,dz=0 -> 0 rotation; dx=0,dz=1 -> -90deg rotation, which is
-       exactly the world +Z direction). ---- */
-    function placeRoadSegment(x0,z0,x1,z1){
-      const mx=(x0+x1)/2, mz=(z0+z1)/2;
-      const my = heightAt(mx,mz);
-      const dx=x1-x0, dz=z1-z0;
-      const len = Math.hypot(dx,dz);
-      if(len < 1e-6) return;
-      const rot = Math.atan2(-dz, dx);
-      dummy.position.set(mx, my+ROAD_Y_LIFT, mz);
-      dummy.rotation.set(0, rot, 0);
-      dummy.scale.set(len, ROAD_THICK, ROAD_WIDTH);
-      dummy.updateMatrix();
-      roadBatch.setMatrixAt(roadBatch.count, dummy.matrix);
-      roadBatch.count++;
-      // sidewalk/curb strip on both sides, just outside this segment's own painted edge line — reuses
-      // the same rotatedOffset() helper the shop archetype's wall-mounted awning/door use above, since
-      // a local (0,0,±lateral) offset rotated by this segment's own rot lands exactly perpendicular to it
-      const sidewalkOffset = ROAD_WIDTH/2 + SIDEWALK_GAP + SIDEWALK_WIDTH/2;
-      [-1, 1].forEach(side=>{
-        const o = rotatedOffset(rot, 0, side*sidewalkOffset);
-        dummy.position.set(mx+o.x, my+SIDEWALK_Y_LIFT, mz+o.z);
-        dummy.rotation.set(0, rot, 0);
-        dummy.scale.set(len, SIDEWALK_THICK, SIDEWALK_WIDTH);
-        dummy.updateMatrix();
-        sidewalkBatch.setMatrixAt(sidewalkBatch.count, dummy.matrix);
-        sidewalkBatch.count++;
-      });
+    /* ---- roads: continuous ring + radial ribbons ------------------------------------------------
+       ROOT-CAUSE OF THE "shattered fragments" BUG (see task): the previous approach built every
+       ring chord, and every per-lane spoke run, as an INDEPENDENT box via placeRoadSegment(). Each
+       box sampled heightAt() exactly ONCE, at its own midpoint (`const my = heightAt(mx,mz);`
+       above the segment's whole box, both its road box and its two sidewalk boxes, used that one
+       `my`), and then sat perfectly flat at that single height for its entire length. Two boxes
+       that are supposed to meet at a shared endpoint (the end of one ring chord / lane run and the
+       start of the next) each independently averaged a DIFFERENT span of the rolling terrain — and
+       it really is rolling out here: heightAt() above shows CITY_INNER_R=100 is already well past
+       FLAT_R+FLAT_BLEND=78, so the full sine-wave terrain applies at every radius the city ring
+       occupies, never the flattened plateau nearer the origin. So neighboring boxes essentially
+       never agreed on their shared point's height. Combined with each box's own
+       independently-correct-in-isolation-but-discontinuous-with-its-neighbor rotation.y (each
+       chord/run was rotated to align only with ITS OWN direction, with no shared vertex tying it to
+       the next one), the result was a vertical step AND a rotation kink at nearly every joint —
+       exactly the "disconnected fragments at inconsistent angles that don't line up edge-to-edge"
+       symptom that was reported and reproduced in screenshots.
+
+       FIX: every ring and every spoke is now built as ONE continuous ribbon of quads, all
+       referencing a shared vertex at every joint — each joint's height is sampled exactly ONCE (at
+       that joint's own x/z) via heightAt(), and that same vertex (identical x, y, z) is reused by
+       the quad on both sides of it, so neighboring quads are geometrically welded together. There
+       is no "my segment's averaged height" vs "your segment's averaged height" left to disagree
+       about, and no independent per-segment rotation left to kink — the ribbon's own direction
+       naturally follows the loop/line one shared angle-step (rings) or lane-step (spokes) at a
+       time. Sidewalks reuse the exact same two builder functions below (just offset sideways), so
+       they inherit the same guarantee instead of reintroducing the bug on their own account. This
+       replaces the old many-independent-box InstancedMesh approach with two continuous
+       BufferGeometry meshes (road + sidewalk) — correctness first, but it also cuts the road-family
+       draw call payload from hundreds of instances to two real meshes plus the crosswalk batch. ---- */
+    const ROAD_UV_TILE = 6;       // world units per full road-texture tile along the direction of travel
+    const SIDEWALK_UV_TILE = 4;   // world units per full paver-texture tile
+    const sidewalkOffset = ROAD_WIDTH/2 + SIDEWALK_GAP + SIDEWALK_WIDTH/2; // lateral offset of each sidewalk strip from its road's own centerline (same value the old placeRoadSegment() used)
+
+    const roadPositions = [], roadUVs = [], roadIndices = [];
+    const sidewalkPositions = [], sidewalkUVs = [], sidewalkIndices = [];
+
+    // One closed loop (a ring road, or one of its two flanking sidewalk rings) of cross-sections
+    // going all the way around the circle at `radius`, `width` wide, textured at `tileLen`
+    // world-units-per-repeat. Every cross-section's two vertices (inner/outer edge) are pushed
+    // exactly once and indexed by both the quad before it and the quad after it, so consecutive
+    // quads always share their joint edge exactly (same x/y/z) — see the doc comment above.
+    function buildRingRibbon(posArr, uvArr, idxArr, radius, width, tileLen){
+      const subCount = CITY_SECTORS*ROAD_ARC_SUBDIV; // same 72-facet resolution the old per-sector chord loop used, so the curve still hugs the rolling terrain this closely
+      const subAngle = (Math.PI*2)/subCount;
+      const rIn = radius - width/2, rOut = radius + width/2;
+      const base = posArr.length/3;
+      let dist = 0;
+      for(let k=0;k<=subCount;k++){ // k===subCount re-adds the starting angle to close the loop; its (x,z) exactly matches k===0's, so the loop welds shut with zero gap even though it's a fresh pair of vertices (only their u differs, for clean end-to-end texture tiling)
+        const a = k*subAngle, ca = Math.cos(a), sa = Math.sin(a);
+        const xi = rIn*ca, zi = rIn*sa, yi = heightAt(xi,zi);
+        const xo = rOut*ca, zo = rOut*sa, yo = heightAt(xo,zo);
+        posArr.push(xi,yi,zi, xo,yo,zo);
+        const u = dist/tileLen;
+        uvArr.push(u,0, u,1);
+        if(k<subCount) dist += radius*subAngle; // arc length of the upcoming step, measured at the centerline radius
+        if(k>0){
+          const i0=base+(k-1)*2, i1=i0+1, i2=base+k*2, i3=i2+1;
+          idxArr.push(i0,i2,i1, i1,i2,i3);
+        }
+      }
     }
-    // concentric ring roads, one at every lane boundary (CITY_LANES+1 of them), each approximated as ROAD_ARC_SUBDIV short chords per sector
+
+    // One straight ribbon (a radial spoke road, or one of its two flanking sidewalk lines) running
+    // the full CITY_INNER_R -> CITY_OUTER_R span along angle `theta` in ONE strand, offset sideways
+    // by `lateralOffset` (0 for the road itself, +-sidewalkOffset for its sidewalks), cross-sectioned
+    // at every lane boundary so lane joins share a vertex the same way the ring loop's angle steps
+    // do above — this is what stops a spoke's lane boundaries from stepping vertically, since the
+    // old code gave each lane's run its own independent box and its own independent height sample.
+    function buildSpokeRibbon(posArr, uvArr, idxArr, theta, lateralOffset, width, tileLen){
+      const ct = Math.cos(theta), st = Math.sin(theta);
+      const tx = -st, tz = ct; // tangential unit vector, perpendicular to this spoke's own radial direction
+      const base = posArr.length/3;
+      let dist = 0;
+      for(let l=0;l<=CITY_LANES;l++){
+        const r = CITY_INNER_R + l*laneDepth;
+        const cx = r*ct + lateralOffset*tx, cz = r*st + lateralOffset*tz;
+        const xL = cx - tx*width/2, zL = cz - tz*width/2, yL = heightAt(xL,zL);
+        const xR = cx + tx*width/2, zR = cz + tz*width/2, yR = heightAt(xR,zR);
+        posArr.push(xL,yL,zL, xR,yR,zR);
+        const u = dist/tileLen;
+        uvArr.push(u,0, u,1);
+        if(l<CITY_LANES) dist += laneDepth;
+        if(l>0){
+          const i0=base+(l-1)*2, i1=i0+1, i2=base+l*2, i3=i2+1;
+          idxArr.push(i0,i2,i1, i1,i2,i3);
+        }
+      }
+    }
+
+    // concentric ring roads, one continuous loop per lane boundary (CITY_LANES+1 of them), plus
+    // their two flanking sidewalk loops each
     for(let ring=0; ring<=CITY_LANES; ring++){
       const r = CITY_INNER_R + ring*laneDepth;
-      const subCount = CITY_SECTORS*ROAD_ARC_SUBDIV;
-      const subAngle = (Math.PI*2)/subCount;
-      for(let k=0;k<subCount;k++){
-        const a0=k*subAngle, a1=a0+subAngle;
-        placeRoadSegment(r*Math.cos(a0), r*Math.sin(a0), r*Math.cos(a1), r*Math.sin(a1));
-      }
+      buildRingRibbon(roadPositions, roadUVs, roadIndices, r, ROAD_WIDTH, ROAD_UV_TILE);
+      buildRingRibbon(sidewalkPositions, sidewalkUVs, sidewalkIndices, r - sidewalkOffset, SIDEWALK_WIDTH, SIDEWALK_UV_TILE);
+      buildRingRibbon(sidewalkPositions, sidewalkUVs, sidewalkIndices, r + sidewalkOffset, SIDEWALK_WIDTH, SIDEWALK_UV_TILE);
     }
-    // radial spoke roads, one at every sector boundary, split per-lane so each short segment can sample its own terrain height
+    // radial spoke roads, one continuous ribbon per sector boundary spanning ALL lanes in a single
+    // strand, plus their two flanking sidewalk ribbons each
     for(let s=0;s<CITY_SECTORS;s++){
       const theta = s*sectorAngle;
-      const ct = Math.cos(theta), st = Math.sin(theta);
-      for(let l=0;l<CITY_LANES;l++){
-        const rStart = CITY_INNER_R+l*laneDepth, rEnd = rStart+laneDepth;
-        placeRoadSegment(rStart*ct, rStart*st, rEnd*ct, rEnd*st);
-      }
+      buildSpokeRibbon(roadPositions, roadUVs, roadIndices, theta, 0, ROAD_WIDTH, ROAD_UV_TILE);
+      buildSpokeRibbon(sidewalkPositions, sidewalkUVs, sidewalkIndices, theta, -sidewalkOffset, SIDEWALK_WIDTH, SIDEWALK_UV_TILE);
+      buildSpokeRibbon(sidewalkPositions, sidewalkUVs, sidewalkIndices, theta,  sidewalkOffset, SIDEWALK_WIDTH, SIDEWALK_UV_TILE);
     }
+
+    // builds one real THREE.Mesh from an accumulated ribbon's raw position/uv/index arrays,
+    // applying its own vertical lift (ROAD_Y_LIFT / SIDEWALK_Y_LIFT) uniformly to every vertex —
+    // same role the old dummy.position.set(mx, my+LIFT, mz) played per-box, just applied once here
+    function buildRibbonMesh(positions, uvs, indices, material, yLift){
+      const geo = new THREE.BufferGeometry();
+      const lifted = new Float32Array(positions.length);
+      for(let i=0;i<positions.length;i+=3){ lifted[i]=positions[i]; lifted[i+1]=positions[i+1]+yLift; lifted[i+2]=positions[i+2]; }
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(lifted, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, material);
+      m.castShadow = false; m.receiveShadow = true; // see shadow note above
+      scene.add(m);
+      return m;
+    }
+    const roadMesh = buildRibbonMesh(roadPositions, roadUVs, roadIndices, roadMat, ROAD_Y_LIFT);
+    const sidewalkMesh = buildRibbonMesh(sidewalkPositions, sidewalkUVs, sidewalkIndices, sidewalkMat, SIDEWALK_Y_LIFT);
+
     // crosswalks: a fixed, practical subset of spoke/ring intersections rather than every one —
     // one short zebra-striped strip per sector along the innermost ring only (CITY_SECTORS = 24
     // total), where each spoke meets the ring closest to the village-facing side of the map
@@ -1985,14 +2072,11 @@
       crosswalkBatch.setMatrixAt(crosswalkBatch.count, dummy.matrix);
       crosswalkBatch.count++;
     }
-    roadBatch.instanceMatrix.needsUpdate = true;
-    sidewalkBatch.instanceMatrix.needsUpdate = true;
     crosswalkBatch.instanceMatrix.needsUpdate = true;
-    // 3 road-family InstancedMesh draw calls total (roadBatch/sidewalkBatch/crosswalkBatch) — one
-    // more than the 2 the previous pass had (roadBatch/roadLineBatch), since the retired
-    // roadLineBatch's texture-baked replacement is "free" (no batch of its own) while sidewalks and
-    // crosswalks are genuinely new geometry categories, each still just ONE shared InstancedMesh
-    // batch no matter how many road segments or intersections exist.
+    // 3 road-family draw calls total (roadMesh/sidewalkMesh/crosswalkBatch) — same count as the
+    // previous pass (roadBatch/sidewalkBatch/crosswalkBatch), but roadMesh/sidewalkMesh are each now
+    // ONE continuous, vertex-welded BufferGeometry instead of an InstancedMesh of hundreds of
+    // independent, inconsistently-height-sampled boxes.
   })();
 
   /* ================= LIVE BACKEND DATA, CLICK PANEL, KPI GRID ================= */
