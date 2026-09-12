@@ -434,7 +434,7 @@
   if(!gltfLoader){
     setModelStatus("Real robot models unavailable: GLTFLoader did not load — showing built-in robots.");
   }
-  function replaceRobotMesh(rb, url, targetHeight){
+  function replaceRobotMesh(rb, url, targetHeight, tintColor){
     if(!gltfLoader) return;
     modelsExpected++;
     setModelStatus("Loading real robot model… (" + url + ")");
@@ -461,7 +461,7 @@
         for(let i=0;i<binStr.length;i++) bytes[i] = binStr.charCodeAt(i);
         gltfLoader.parse(bytes.buffer, "", (gltf)=>{
           try{
-            onRobotModelLoaded(rb, gltf, targetHeight);
+            onRobotModelLoaded(rb, gltf, targetHeight, tintColor);
             noteModelSettled(true, url);
             setModelStatus("");
           }catch(e){
@@ -478,7 +478,7 @@
         setModelStatus("Robot model failed to load (" + url + "): " + (err && err.message ? err.message : err));
       });
   }
-  function onRobotModelLoaded(rb, gltf, targetHeight){
+  function onRobotModelLoaded(rb, gltf, targetHeight, tintColor){
       const obj = gltf.scene;
       if(!obj) throw new Error("glTF had no .scene");
       obj.updateMatrixWorld(true);
@@ -498,9 +498,27 @@
           if(o.material) o.material.side = THREE.DoubleSide;
         }
       });
+      /* optional per-site accent tint (see SITES' `tint:true` flag) — a loaded
+         glTF model has its own baked-in materials, so changing `accent` alone
+         (unlike the procedural robot) never reaches the visible mesh; blend a
+         modest amount of the site's accent into each material's existing color
+         instead of a flat recolor, so the model's own shading/detail still
+         reads through */
+      if(tintColor != null) tintModelMeshes(obj, tintColor);
       while(rb.bot.children.length) rb.bot.remove(rb.bot.children[0]);
       rb.bot.add(obj);
       rb.isGLTF = true;
+  }
+
+  function tintModelMeshes(obj, tintColor){
+    const tint = new THREE.Color(tintColor);
+    const blend = 0.35;
+    obj.traverse(o=>{
+      if(o.isMesh && o.material){
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(m=>{ if(m && m.color) m.color.lerp(tint, blend); });
+      }
+    });
   }
 
   function makeGlowTexture(){
@@ -938,7 +956,7 @@
   const RING = 47;
   const SITES = [
     {name:"frontend-ux-ui", accent:0x4fb8e0, build:buildHouse},
-    {name:"tester",         accent:0xff8aa5, build:buildPlayground},
+    {name:"tester",         accent:0xa855f7, build:buildPlayground, tint:true},
     {name:"auditor",        accent:0xe15a5a, build:buildHospital},
     {name:"chat",           accent:0xf2b143, build:buildSchool},
     {name:"backend-dotnet", accent:0x8fa3b8, build:buildFactory},
@@ -1115,7 +1133,7 @@
     const rb = makeRobot(s.accent, i*0.9);
     rb.root.position.set(0.9, 0, info.front);
     site.add(rb.root);
-    replaceRobotMesh(rb, "models/chibi-robot.json", 2.7);
+    replaceRobotMesh(rb, "models/chibi-robot.json", 2.7, s.tint ? s.accent : null);
     robotsList.push({dot:s.accent, name:s.name});
     robotBySiteIndex.push(rb);
 
