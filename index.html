@@ -338,9 +338,14 @@
   scene.background = new THREE.Color(skyColor);
   /* far bumped 400 -> 520 for the horizon-ring city (see buildCityRing()
      below): at maxDistance zoom-out (280) a ring point on the far side of
-     the scene can sit up to ~473 units from the camera, which the old
-     400 far distance would have faded to nothing; near/fov/color untouched
-     so the existing look is otherwise unchanged. */
+     the scene could sit up to ~473 units from the camera when that ring's
+     outer edge was 220 (its original radius), which the old 400 far
+     distance would have faded to nothing. The ring's outer edge has since
+     moved in to 160 (see buildCityRing()), so that worst case is now
+     smaller still (~440) and 520 has more headroom than ever; left
+     unchanged rather than tightened back down since other far-out elements
+     (clouds, etc.) also rely on it. near/fov/color untouched so the
+     existing look is otherwise unchanged. */
   scene.fog = new THREE.Fog(skyColor, 175, 520);
 
   const camera = new THREE.PerspectiveCamera(45, 16/9, 0.1, 900);
@@ -1477,62 +1482,187 @@
   cloudPuff(-140,70,-8,0.95);
   cloudPuff(28,96,-150,0.7);
 
-  /* ---------- horizon ring: distant low-poly city skyline ----------
-     Implements the approved "Horizon Ring" concept illustration: a thin
-     ring of small, low-profile city buildings far out on the horizon,
-     fully encircling the scene and clearly separated from the central
-     hill/village by open green meadow (the terrain between the village
-     RING (47) and CITY_RING_RADIUS (205) below is left empty — only trees,
-     up to radius ~117, sit in that gap).
-     Perspective plus a deliberately modest absolute height range keeps this
-     read as atmospheric background rather than a competing subject: the
-     tallest possible city building here (8 units) stays well under every
-     village rooftop (5.2-12.5 units) and the orchestrator core's antenna
-     tip (~17 units), and CITY_RING_RADIUS (205) is ~4.4x RING (47) — so the
-     skyline is both smaller and much farther away than anything in the
-     village/hill.
-     Built the same way as grassBlades() above: a handful of
-     THREE.InstancedMesh batches (one per muted color tone) instead of one
-     mesh per building, so ~220 buildings cost only 4 draw calls. */
-  (function buildCityRing(){
-    const CITY_RING_RADIUS = 205;     // ~4.4x RING (47); comfortably inside the 460x460 terrain (half-extent 230)
-    const CITY_RING_BAND_DEPTH = 30;  // buildings scattered radius 190-220 — a thin band, not a hard circle
-    const CITY_BUILDING_COUNT = 220;  // circumference here is ~1288 units, so this reads as a near-continuous skyline with only small gaps
-    const CITY_MIN_WH = 2.5, CITY_MAX_WH = 6;  // building width/depth range (world units)
-    const CITY_MIN_H = 3, CITY_MAX_H = 8;      // building height range (world units) — see the height-safety note above
-    const CITY_COLORS = [0xada79a, 0xc9b896, 0xe3dcc9, 0x8f8a7e]; // muted warm gray / tan / warm white / slate — distinct from the village's pastel accents
+  /* ---------- horizon ring: distant low-poly city, now with streets ----------
+     Refines the previously-approved "Horizon Ring" concept (a ring of small,
+     low-profile buildings fully encircling the scene) per a follow-up
+     request: bring the city closer to the village and give it a real street
+     layout instead of scattered boxes. Everything from the original concept
+     that's still true is kept as-is: the same 4-tone muted color palette,
+     the same 3-8 unit building height range, InstancedMesh batching (so
+     this stays a handful of draw calls no matter how many buildings/road
+     segments exist), and the core principle that this must always read as
+     smaller and farther away than the village — never a competing subject.
 
-    const batches = CITY_COLORS.map(color=>{
+     ---- terrain-safety derivation for the new inner radius ----
+     heightAt(x,z) (near the top of this script) is perfectly flat (h=0) for
+     every point with radius < FLAT_R (58) — that's the village's flat mound
+     — then blends linearly from flat up to the full rolling-noise terrain
+     height between radius FLAT_R and FLAT_R+FLAT_BLEND (58 to 78). From
+     radius 78 outward the ground is just the same ordinary rolling terrain
+     used everywhere else on the map (including where the original 190-220
+     ring already sat), so 78 is the exact point past which a building
+     footprint stops sitting on a part-blended slope and starts sitting on
+     ordinary settled ground. CITY_INNER_R below (100) keeps a 22-unit
+     buffer past that 78 boundary — wider than the entire 20-unit blend zone
+     itself — so every block sits on fully-resolved terrain, never the ramp.
+
+     ---- new band ----
+     Replaces the old CITY_RING_RADIUS(205) +/- CITY_RING_BAND_DEPTH(30)
+     (i.e. old band 190-220) with CITY_INNER_R/CITY_OUTER_R = 100-160: the
+     inner edge moves from 190 to 100 (much closer to the village, while
+     staying 22 units clear of the safety line above), and the radial
+     thickness grows from 30 to 60 units, per the "wider and a bit closer"
+     request.
+
+     ---- road network ----
+     The band is divided, in polar coordinates, into CITY_SECTORS angular
+     wedges x CITY_LANES concentric lanes — one "block" per wedge/lane cell.
+     Each block gets its own small cluster of CITY_MIN_PER_BLOCK to
+     CITY_MAX_PER_BLOCK buildings, kept clear of that block's own edges. The
+     block boundaries are drawn as flat, dark-asphalt road strips:
+     CITY_LANES+1 concentric "ring roads" (each approximated as short,
+     individually height-sampled chords so the road hugs the rolling
+     terrain instead of sitting on one long flat plane) plus CITY_SECTORS
+     radial "spoke roads" connecting them — the same concentric-ring +
+     radial-spoke idea already used for the village's own RING(47)/path
+     system above, just restyled as asphalt city streets. This reads as an
+     actual city grid rather than boxes with gaps between them, at the cost
+     of just one extra InstancedMesh batch.
+
+     ---- building count / density ----
+     CITY_SECTORS(24) x CITY_LANES(3) blocks x 2-6 buildings/block averages
+     ~288 buildings (was a flat 220) — a modest increase that keeps visual
+     density roughly consistent now that the band's area has grown (60-unit
+     depth vs 30) while its center radius has moved inward (130 vs 205), and
+     it still renders in 4 draw calls (one InstancedMesh per color).
+
+     ---- shadows ----
+     The old 190-220 band sat entirely outside the sun's +/-125 shadow-
+     camera frustum (see sun.shadow.camera above), so shadows there were
+     turned off outright as wasted GPU work. The new 100-160 band is close
+     enough that large parts of it (especially at non-axis-aligned angles)
+     now fall INSIDE that +/-125 square, so receiveShadow is turned back on
+     for both buildings and roads (cheap — no extra shadow-map render pass).
+     castShadow stays off for both: casting from a few hundred small
+     low-poly instances this far out would cost more than it would ever be
+     visibly worth. */
+  (function buildCityRing(){
+    const CITY_INNER_R = 100;   // was 190; see terrain-safety derivation above (78 + 22-unit buffer)
+    const CITY_OUTER_R = 160;   // was 220; band depth below grows from 30 -> 60
+    const CITY_BAND_DEPTH = CITY_OUTER_R - CITY_INNER_R; // 60
+    const CITY_LANES = 3;                 // concentric block lanes across the band (~20 units deep each)
+    const CITY_SECTORS = 24;              // angular block wedges (15 degrees each)
+    const CITY_MIN_PER_BLOCK = 2, CITY_MAX_PER_BLOCK = 6;
+    const CITY_MIN_WH = 2.5, CITY_MAX_WH = 6;  // building width/depth range (world units) — unchanged
+    const CITY_MIN_H = 3, CITY_MAX_H = 8;      // building height range (world units) — unchanged; see height-safety note above
+    const CITY_COLORS = [0xada79a, 0xc9b896, 0xe3dcc9, 0x8f8a7e]; // unchanged palette — muted warm gray / tan / warm white / slate
+    const ROAD_COLOR = 0x6b6b66;          // asphalt gray, clearly darker/cooler than every building tone above
+    const ROAD_WIDTH = 2.4;               // road strip width (world units)
+    const ROAD_THICK = 0.08;              // road strip thickness (kept thin/flat)
+    const ROAD_Y_LIFT = 0.05;             // lifted slightly above heightAt() to avoid z-fighting with the terrain mesh
+    const ROAD_ARC_SUBDIV = 3;            // chord segments per sector per ring road, so curved ring roads hug the rolling terrain instead of one long flat chord
+
+    const laneDepth = CITY_BAND_DEPTH/CITY_LANES;
+    const sectorAngle = (Math.PI*2)/CITY_SECTORS;
+    const buildingCapacity = CITY_SECTORS*CITY_LANES*CITY_MAX_PER_BLOCK; // upper bound (432); only the instances actually placed below are drawn
+
+    const buildingBatches = CITY_COLORS.map(color=>{
       const m = new THREE.InstancedMesh(
         new THREE.BoxGeometry(1,1,1),
         new THREE.MeshStandardMaterial({color, flatShading:true, roughness:0.9}),
-        CITY_BUILDING_COUNT /* upper bound; only b.count instances (below) are actually drawn */
+        buildingCapacity
       );
-      /* well outside the sun's shadow-camera frustum (±125, see sun.shadow.camera above) at this radius,
-         so shadows here would be wasted GPU work with no visible effect */
-      m.castShadow = false; m.receiveShadow = false;
+      m.castShadow = false; m.receiveShadow = true; // see shadow note above
       m.count = 0;
       scene.add(m);
       return m;
     });
+
+    const roadSegCount = CITY_SECTORS*ROAD_ARC_SUBDIV*(CITY_LANES+1) /* ring roads */ + CITY_SECTORS*CITY_LANES /* spoke roads */;
+    const roadBatch = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1,1,1),
+      new THREE.MeshStandardMaterial({color:ROAD_COLOR, flatShading:true, roughness:0.95}),
+      roadSegCount
+    );
+    roadBatch.castShadow = false; roadBatch.receiveShadow = true; // see shadow note above
+    roadBatch.count = 0;
+    scene.add(roadBatch);
+
     const dummy = new THREE.Object3D();
-    for(let i=0;i<CITY_BUILDING_COUNT;i++){
-      const angle = (i/CITY_BUILDING_COUNT)*Math.PI*2 + (rng()-0.5)*(Math.PI*2/CITY_BUILDING_COUNT)*0.8;
-      const radius = CITY_RING_RADIUS + (rng()-0.5)*CITY_RING_BAND_DEPTH;
-      const x = radius*Math.cos(angle), z = radius*Math.sin(angle);
-      const y = heightAt(x,z);
-      const w = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
-      const d = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
-      const h = CITY_MIN_H + rng()*(CITY_MAX_H-CITY_MIN_H);
-      dummy.position.set(x, y + h/2, z);
-      dummy.rotation.set(0, rng()*Math.PI*2, 0);
-      dummy.scale.set(w, h, d);
-      dummy.updateMatrix();
-      const b = batches[i % batches.length];
-      b.setMatrixAt(b.count, dummy.matrix);
-      b.count++;
+    let colorCursor = 0;
+
+    /* ---- buildings: one small cluster per sector x lane block ---- */
+    for(let s=0;s<CITY_SECTORS;s++){
+      const aStart = s*sectorAngle, aEnd = aStart+sectorAngle;
+      for(let l=0;l<CITY_LANES;l++){
+        const rStart = CITY_INNER_R + l*laneDepth, rEnd = rStart+laneDepth;
+        const midR = (rStart+rEnd)/2;
+        const radialMargin = ROAD_WIDTH/2 + 1.5; // keep building centers clear of this block's own road edges
+        const angMargin = radialMargin/midR;     // linear margin -> radians at this lane's radius (same rr-based conversion the village's own spoke paths use above)
+        const rLo = rStart+radialMargin, rHi = rEnd-radialMargin;
+        const aLo = aStart+angMargin, aHi = aEnd-angMargin;
+        const buildingsHere = CITY_MIN_PER_BLOCK + Math.floor(rng()*(CITY_MAX_PER_BLOCK-CITY_MIN_PER_BLOCK+1));
+        for(let b=0;b<buildingsHere;b++){
+          const angle = aLo + rng()*(aHi-aLo);
+          const radius = rLo + rng()*(rHi-rLo);
+          const x = radius*Math.cos(angle), z = radius*Math.sin(angle);
+          const y = heightAt(x,z);
+          const w = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
+          const d = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
+          const h = CITY_MIN_H + rng()*(CITY_MAX_H-CITY_MIN_H);
+          dummy.position.set(x, y + h/2, z);
+          dummy.rotation.set(0, rng()*Math.PI*2, 0);
+          dummy.scale.set(w, h, d);
+          dummy.updateMatrix();
+          const batch = buildingBatches[colorCursor % buildingBatches.length];
+          colorCursor++;
+          batch.setMatrixAt(batch.count, dummy.matrix);
+          batch.count++;
+        }
+      }
     }
-    batches.forEach(b=>{ b.instanceMatrix.needsUpdate = true; });
+    buildingBatches.forEach(b=>{ b.instanceMatrix.needsUpdate = true; });
+
+    /* ---- roads: one thin box per segment, individually height-sampled and
+       rotated to align with its own direction. For a box scaled along its
+       local +X axis, rotation.y = atan2(-dz,dx) aligns that local +X axis
+       with a world-space direction (dx,dz) — verified against the identity
+       cases (dx=1,dz=0 -> 0 rotation; dx=0,dz=1 -> -90deg rotation, which is
+       exactly the world +Z direction). ---- */
+    function placeRoadSegment(x0,z0,x1,z1){
+      const mx=(x0+x1)/2, mz=(z0+z1)/2;
+      const my = heightAt(mx,mz);
+      const dx=x1-x0, dz=z1-z0;
+      const len = Math.hypot(dx,dz);
+      if(len < 1e-6) return;
+      const rot = Math.atan2(-dz, dx);
+      dummy.position.set(mx, my+ROAD_Y_LIFT, mz);
+      dummy.rotation.set(0, rot, 0);
+      dummy.scale.set(len, ROAD_THICK, ROAD_WIDTH);
+      dummy.updateMatrix();
+      roadBatch.setMatrixAt(roadBatch.count, dummy.matrix);
+      roadBatch.count++;
+    }
+    // concentric ring roads, one at every lane boundary (CITY_LANES+1 of them), each approximated as ROAD_ARC_SUBDIV short chords per sector
+    for(let ring=0; ring<=CITY_LANES; ring++){
+      const r = CITY_INNER_R + ring*laneDepth;
+      const subCount = CITY_SECTORS*ROAD_ARC_SUBDIV;
+      const subAngle = (Math.PI*2)/subCount;
+      for(let k=0;k<subCount;k++){
+        const a0=k*subAngle, a1=a0+subAngle;
+        placeRoadSegment(r*Math.cos(a0), r*Math.sin(a0), r*Math.cos(a1), r*Math.sin(a1));
+      }
+    }
+    // radial spoke roads, one at every sector boundary, split per-lane so each short segment can sample its own terrain height
+    for(let s=0;s<CITY_SECTORS;s++){
+      const theta = s*sectorAngle;
+      const ct = Math.cos(theta), st = Math.sin(theta);
+      for(let l=0;l<CITY_LANES;l++){
+        const rStart = CITY_INNER_R+l*laneDepth, rEnd = rStart+laneDepth;
+        placeRoadSegment(rStart*ct, rStart*st, rEnd*ct, rEnd*st);
+      }
+    }
+    roadBatch.instanceMatrix.needsUpdate = true;
   })();
 
   /* ================= LIVE BACKEND DATA, CLICK PANEL, KPI GRID ================= */
