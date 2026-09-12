@@ -1482,114 +1482,365 @@
   cloudPuff(-140,70,-8,0.95);
   cloudPuff(28,96,-150,0.7);
 
-  /* ---------- horizon ring: distant low-poly city, now with streets ----------
+  /* ---------- horizon ring: distant low-poly city, now with streets and
+     detailed building archetypes ----------
      Refines the previously-approved "Horizon Ring" concept (a ring of small,
-     low-profile buildings fully encircling the scene) per a follow-up
-     request: bring the city closer to the village and give it a real street
-     layout instead of scattered boxes. Everything from the original concept
-     that's still true is kept as-is: the same 4-tone muted color palette,
-     the same 3-8 unit building height range, InstancedMesh batching (so
-     this stays a handful of draw calls no matter how many buildings/road
-     segments exist), and the core principle that this must always read as
-     smaller and farther away than the village — never a competing subject.
+     low-profile buildings fully encircling the scene) per two follow-up
+     requests: (1) bring the city closer to the village and give it a real
+     street layout instead of scattered boxes (unchanged by this pass — see
+     the terrain-safety/band/road-network notes below), and (2) stop using
+     flat single-box buildings and give the city a handful of distinct, more
+     detailed building designs in the same low-poly vocabulary as the
+     village's own buildHouse()/buildSchool()/etc above (pitched or flat
+     roofs, a window band, an awning+door for the shop archetype), each
+     cheaply repeated across the whole city via InstancedMesh — plus wider
+     roads with an added center-line stripe so the streets read as real
+     roads instead of thin lines. Everything from the original concept
+     that's still true is kept as-is: the same muted gray/tan/warm-white
+     color family, the same 3-8 unit building height / 2.5-6 unit width
+     range, InstancedMesh batching (a small FIXED number of draw calls no
+     matter how many buildings/road segments exist), and the core principle
+     that this must always read as smaller and farther away than the
+     village — never a competing subject.
 
-     ---- terrain-safety derivation for the new inner radius ----
+     ---- terrain-safety derivation for the inner radius (unchanged) ----
      heightAt(x,z) (near the top of this script) is perfectly flat (h=0) for
      every point with radius < FLAT_R (58) — that's the village's flat mound
      — then blends linearly from flat up to the full rolling-noise terrain
      height between radius FLAT_R and FLAT_R+FLAT_BLEND (58 to 78). From
      radius 78 outward the ground is just the same ordinary rolling terrain
-     used everywhere else on the map (including where the original 190-220
-     ring already sat), so 78 is the exact point past which a building
-     footprint stops sitting on a part-blended slope and starts sitting on
-     ordinary settled ground. CITY_INNER_R below (100) keeps a 22-unit
-     buffer past that 78 boundary — wider than the entire 20-unit blend zone
-     itself — so every block sits on fully-resolved terrain, never the ramp.
+     used everywhere else on the map, so 78 is the exact point past which a
+     building footprint stops sitting on a part-blended slope and starts
+     sitting on ordinary settled ground. CITY_INNER_R below (100) keeps a
+     22-unit buffer past that 78 boundary — wider than the entire 20-unit
+     blend zone itself — so every block sits on fully-resolved terrain,
+     never the ramp.
 
-     ---- new band ----
-     Replaces the old CITY_RING_RADIUS(205) +/- CITY_RING_BAND_DEPTH(30)
-     (i.e. old band 190-220) with CITY_INNER_R/CITY_OUTER_R = 100-160: the
-     inner edge moves from 190 to 100 (much closer to the village, while
-     staying 22 units clear of the safety line above), and the radial
-     thickness grows from 30 to 60 units, per the "wider and a bit closer"
-     request.
+     ---- band (unchanged): CITY_INNER_R/CITY_OUTER_R = 100-160 ----
 
-     ---- road network ----
+     ---- road network (unchanged) ----
      The band is divided, in polar coordinates, into CITY_SECTORS angular
      wedges x CITY_LANES concentric lanes — one "block" per wedge/lane cell.
      Each block gets its own small cluster of CITY_MIN_PER_BLOCK to
      CITY_MAX_PER_BLOCK buildings, kept clear of that block's own edges. The
-     block boundaries are drawn as flat, dark-asphalt road strips:
-     CITY_LANES+1 concentric "ring roads" (each approximated as short,
-     individually height-sampled chords so the road hugs the rolling
-     terrain instead of sitting on one long flat plane) plus CITY_SECTORS
-     radial "spoke roads" connecting them — the same concentric-ring +
-     radial-spoke idea already used for the village's own RING(47)/path
-     system above, just restyled as asphalt city streets. This reads as an
-     actual city grid rather than boxes with gaps between them, at the cost
-     of just one extra InstancedMesh batch.
+     block boundaries are drawn as flat asphalt road strips: CITY_LANES+1
+     concentric "ring roads" (each approximated as short, individually
+     height-sampled chords so the road hugs the rolling terrain instead of
+     sitting on one long flat plane) plus CITY_SECTORS radial "spoke roads"
+     connecting them.
 
-     ---- building count / density ----
+     ---- road realism pass (new) ----
+     ROAD_WIDTH widened from 2.4 to 4.5 world units — the strips were
+     reading as "barely lines" at the old width. Still well clear of the
+     CITY_MIN_WH..CITY_MAX_WH (2.5-6) building footprints given the
+     radialMargin math below, so buildings never overlap a road. A second,
+     thinner InstancedMesh batch (roadLineBatch) draws a pale center-line
+     stripe down the middle of every road segment, at the exact same
+     position/length/rotation as its road segment, just narrower and lifted
+     a hair higher to avoid z-fighting — one extra draw call total, reused
+     across every ring and spoke segment exactly like roadBatch itself.
+
+     ---- building archetypes (new) ----
+     Every building slot from the existing block-grid loop below is now
+     assigned one of 4 archetypes at random, via the shared seeded rng()
+     (not Math.random()):
+       - ARCH_SLAB (0): flat-roofed slab tower — box body, a thin
+         overhanging flat roof cap, and a lighter-toned window band near
+         the top.
+       - ARCH_STEPPED (1): stepped mid-rise — a wider base tier and a
+         narrower top tier stacked flush on top of it (in two different
+         palette tones, for a visible tier break), plus a window band
+         across the base tier.
+       - ARCH_SHOP (2): small shop-style low building — box body with a
+         flat awning strip and a door-colored inset riveted to one wall
+         face.
+       - ARCH_TOWER (3): small tower — a narrower box body topped with a
+         pitched (pyramid) roof and its own window band, echoing the
+         village houses'/school's own pitched-roof silhouette at a much
+         smaller, plainer scale.
+     Three.js r128 is loaded via the CDN <script> tags above with no
+     examples/js/utils/BufferGeometryUtils.js alongside it, so
+     THREE.BufferGeometryUtils.mergeGeometries is NOT available in this
+     build — merging each archetype's sub-shapes into one BufferGeometry per
+     archetype (one InstancedMesh per archetype, as would otherwise be
+     ideal) isn't an option without adding a new script dependency, which
+     this pass deliberately avoids. Instead, every archetype's sub-parts
+     stay per-instance transforms (position/rotation/scale) on a UNIT box
+     (or, for the pitched roof, a unit cone) geometry — and since several
+     archetypes' sub-parts are literally the same geometry+material, those
+     sub-parts share the SAME InstancedMesh batch across archetypes rather
+     than each archetype getting its own: every archetype's plain box
+     volume(s) (the slab's body, both tiers of the stepped mid-rise, the
+     shop's body, the small tower's body) all draw from the same 4
+     palette-color "body" batches used before this pass; only each
+     archetype's distinguishing accent gets a dedicated batch
+     (roofCapBatch, windowBandBatch — shared by 3 of the 4 archetypes —
+     awningBatch, doorBatch, pitchRoofBatch). That keeps the total city
+     draw-call count fixed and low no matter how many buildings, or which
+     archetype mix, end up placed.
+
+     ---- building count / density (unchanged) ----
      CITY_SECTORS(24) x CITY_LANES(3) blocks x 2-6 buildings/block averages
-     ~288 buildings (was a flat 220) — a modest increase that keeps visual
-     density roughly consistent now that the band's area has grown (60-unit
-     depth vs 30) while its center radius has moved inward (130 vs 205), and
-     it still renders in 4 draw calls (one InstancedMesh per color).
+     ~288 buildings; the block-grid placement/radius/count logic itself is
+     untouched by this pass — only what gets instanced at each slot changed.
 
-     ---- shadows ----
-     The old 190-220 band sat entirely outside the sun's +/-125 shadow-
-     camera frustum (see sun.shadow.camera above), so shadows there were
-     turned off outright as wasted GPU work. The new 100-160 band is close
-     enough that large parts of it (especially at non-axis-aligned angles)
-     now fall INSIDE that +/-125 square, so receiveShadow is turned back on
-     for both buildings and roads (cheap — no extra shadow-map render pass).
-     castShadow stays off for both: casting from a few hundred small
-     low-poly instances this far out would cost more than it would ever be
-     visibly worth. */
+     ---- shadows (unchanged) ----
+     receiveShadow stays on for every city batch (buildings and roads); the
+     100-160 band is close enough that large parts of it fall inside the
+     sun's +/-125 shadow-camera frustum. castShadow stays off for all of
+     them: casting from a few hundred small low-poly instances this far out
+     would cost more than it would ever be visibly worth. */
+
+  /* ---------- horizon-ring texture pass (new, follow-up to the archetype
+     pass documented just above) ----------
+     User feedback after seeing the archetype pass: flat accent bands/insets
+     didn't read as "realistic" enough. This pass adds procedural canvas
+     textures on top of the existing box/strip geometry from the pass above
+     -- no new geometry, no imported models (this project has no 3D asset
+     pipeline for building models, unlike the robot's glTF). Same
+     canvas->CanvasTexture technique already used elsewhere in this file
+     (see makeGrassTexture()/makeGrassBump() ~line 648, makeGlowTexture()
+     ~line 581): draw into an offscreen <canvas>, wrap it in a
+     THREE.CanvasTexture, set wrapS/wrapT = THREE.RepeatWrapping, and let
+     texture.repeat tile it across whatever instance geometry uses that
+     shared material -- a FIXED, small number of textures generated once
+     here, never per-instance, reused across every InstancedMesh instance
+     via that batch's material.map (critical given up to buildingCapacity
+     (432) building instances and roadSegCount road segments).
+
+     ---- building walls (Part 1): 4 window-grid textures, one per archetype ----
+     makeWindowGridTexture() draws a small tile of a handful of window
+     cells (fillRect per cell, lit vs unlit tone chosen with the shared
+     seeded rng() -- never Math.random(), so the pattern stays reproducible
+     across reloads) directly into a canvas, then repeat-tiles it across
+     each archetype's body box face. Exactly 4 textures exist for the whole
+     city (slabTex/steppedTex/shopTex/towerTex below), each generated once
+     and assigned to that archetype's own dedicated body InstancedMesh
+     material as .map -- that per-archetype-shared-material approach
+     (rather than per-instance) is what keeps this cheap, same as every
+     other batch in this system. Base tones are muted/desaturated versions
+     of the brick-red / blue-glass / tan / mustard-yellow look from the
+     reference imagery, chosen to still sit within this city's existing
+     warm-gray/tan/warm-white family rather than saturated, cartoonish
+     colors. This supersedes the old flat single-tone body + separate
+     windowBandBatch accent strip from the pass above (that batch is
+     retired -- the tiled window texture on the wall itself reads as
+     windows far better than a single flat inset band ever did); the
+     roofline/awning/door silhouette accents from that pass (roofCapBatch,
+     awningBatch, doorBatch, pitchRoofBatch) are unchanged and kept exactly
+     as before -- this pass is about wall material, not silhouette.
+     ARCH_STEPPED still gets a visibly distinct top tier: it reuses the
+     exact same steppedTex texture object (zero extra canvas draws) on a
+     second InstancedMesh batch (steppedTopBodyBatch) whose material.color
+     tint multiplies that shared map differently -- the same "reuse a
+     shared resource, vary only the cheap per-batch material property"
+     trick as the body/accent split everywhere else in this system.
+
+     ---- roads (Part 2): asphalt+markings, sidewalk/curb, crosswalks ----
+     makeRoadSurfaceTexture() bakes an asphalt-gray base, a dashed white
+     center line, and thin solid white edge lines into one shared canvas,
+     applied as roadBatch's own material.map (wrapS repeats along a
+     segment's length so the dash pattern repeats down the road; the width
+     axis is never repeated since a segment's local z always spans exactly
+     one full ROAD_WIDTH). Since the center line is now baked directly into
+     this texture, the separate geometric roadLineBatch stripe mesh from
+     the pass above is retired outright rather than kept alongside it --
+     drawing both would double up the same visual detail for no benefit
+     and cost an extra draw call for nothing.
+     sidewalkBatch adds a thin lighter paver/curb strip just outside each
+     road segment's outer white edge line, on both sides, via one shared
+     makePaverTexture() canvas (tiled along length exactly like the road
+     texture) -- still one InstancedMesh batch, just 2 instances per road
+     segment instead of 1.
+     crosswalkBatch adds a small zebra-stripe canvas (makeCrosswalkTexture())
+     applied to a short perpendicular strip at every spoke/ring intersection
+     along the innermost ring (CITY_INNER_R, the ring closest to -- and most
+     visible from -- the village side of the map): a fixed, practical
+     subset of intersections (CITY_SECTORS = 24 of them) rather than
+     literally every ring x spoke intersection, which would be excessive
+     for a background detail this far away.
+
+     ---- net batch/texture count: see the comments at the end of
+     buildCityRing() below for the final tallies. ---- */
   (function buildCityRing(){
-    const CITY_INNER_R = 100;   // was 190; see terrain-safety derivation above (78 + 22-unit buffer)
-    const CITY_OUTER_R = 160;   // was 220; band depth below grows from 30 -> 60
+    const CITY_INNER_R = 100;   // see terrain-safety derivation above (78 + 22-unit buffer)
+    const CITY_OUTER_R = 160;
     const CITY_BAND_DEPTH = CITY_OUTER_R - CITY_INNER_R; // 60
     const CITY_LANES = 3;                 // concentric block lanes across the band (~20 units deep each)
     const CITY_SECTORS = 24;              // angular block wedges (15 degrees each)
     const CITY_MIN_PER_BLOCK = 2, CITY_MAX_PER_BLOCK = 6;
     const CITY_MIN_WH = 2.5, CITY_MAX_WH = 6;  // building width/depth range (world units) — unchanged
     const CITY_MIN_H = 3, CITY_MAX_H = 8;      // building height range (world units) — unchanged; see height-safety note above
-    const CITY_COLORS = [0xada79a, 0xc9b896, 0xe3dcc9, 0x8f8a7e]; // unchanged palette — muted warm gray / tan / warm white / slate
-    const ROAD_COLOR = 0x6b6b66;          // asphalt gray, clearly darker/cooler than every building tone above
-    const ROAD_WIDTH = 2.4;               // road strip width (world units)
+    // CITY_COLORS (the old flat per-building palette) is retired — every archetype now gets its
+    // own dedicated window-grid texture/material instead of a round-robin flat color (see the
+    // texture-pass doc comment above)
+    const ROAD_COLOR = 0x6b6b66;          // asphalt gray — now baked directly into the shared road canvas texture below (see makeRoadSurfaceTexture()), with the material's own `color` left white so the canvas defines the visible tone directly, same convention as the archetype body textures
+    const ROAD_WIDTH = 4.5;               // was 2.4 — widened so the streets read as real roads, not thin lines
     const ROAD_THICK = 0.08;              // road strip thickness (kept thin/flat)
     const ROAD_Y_LIFT = 0.05;             // lifted slightly above heightAt() to avoid z-fighting with the terrain mesh
     const ROAD_ARC_SUBDIV = 3;            // chord segments per sector per ring road, so curved ring roads hug the rolling terrain instead of one long flat chord
+    const SIDEWALK_WIDTH = 1.1;           // sidewalk/curb strip width (world units), placed on both sides of every road segment
+    const SIDEWALK_THICK = ROAD_THICK*1.6; // slightly thicker than the road surface so it reads as a curb step-up
+    const SIDEWALK_Y_LIFT = ROAD_Y_LIFT + 0.02;  // sits a hair above the road surface, avoiding z-fighting
+    const SIDEWALK_GAP = 0.05;            // small clear gap outside the road's own painted edge line before the sidewalk starts
+    const CROSSWALK_DEPTH = 1.6;          // crosswalk strip depth along the direction of travel (its short axis)
+    const CROSSWALK_Y_LIFT = ROAD_Y_LIFT + 0.035; // between the road surface and the sidewalk lift, avoiding z-fighting with either
 
     const laneDepth = CITY_BAND_DEPTH/CITY_LANES;
     const sectorAngle = (Math.PI*2)/CITY_SECTORS;
     const buildingCapacity = CITY_SECTORS*CITY_LANES*CITY_MAX_PER_BLOCK; // upper bound (432); only the instances actually placed below are drawn
 
-    const buildingBatches = CITY_COLORS.map(color=>{
-      const m = new THREE.InstancedMesh(
-        new THREE.BoxGeometry(1,1,1),
-        new THREE.MeshStandardMaterial({color, flatShading:true, roughness:0.9}),
-        buildingCapacity
-      );
+    /* ---- building archetypes: shared unit geometries + per-archetype body/accent batches (see both doc comments above for why this shape of batching was chosen over one-InstancedMesh-per-archetype, and what's new in the texture pass vs the archetype pass before it) ---- */
+    const ARCH_SLAB = 0, ARCH_STEPPED = 1, ARCH_SHOP = 2, ARCH_TOWER = 3, ARCHETYPE_COUNT = 4;
+    const CITY_ROOF_TONE = 0x746f63;        // muted warm-gray flat roof cap (slab tower)
+    const CITY_AWNING_TONE = 0xcdbb9a;      // warm tan awning strip (shop)
+    const CITY_DOOR_TONE = 0x5c5347;        // deep warm taupe door inset (shop) — darkest accent, still within the gray/tan family
+    const CITY_PITCH_ROOF_TONE = 0x8a7f68;  // muted taupe pitched roof (tower)
+
+    const unitBox = new THREE.BoxGeometry(1,1,1);
+    function makeAccentBatch(geo, color, extra){
+      const m = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial(Object.assign({color, flatShading:true, roughness:0.8}, extra||{})), buildingCapacity);
       m.castShadow = false; m.receiveShadow = true; // see shadow note above
       m.count = 0;
       scene.add(m);
       return m;
-    });
+    }
+
+    /* ---- Part 1 of the texture pass: procedural window-grid textures, exactly 4 total (one per
+       archetype), generated once here and shared via each archetype's own body material.map —
+       never per-instance (see the texture-pass doc comment above). ---- */
+    function makeWindowGridTexture(wallHex, unlitHex, litHex, cols, rows, litChance){
+      const cellPx = 32;
+      const c = document.createElement("canvas"); c.width = cellPx*cols; c.height = cellPx*rows;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = wallHex; ctx.fillRect(0,0,c.width,c.height);
+      const inset = cellPx*0.16; // mullion/wall gap left showing around each pane
+      for(let r=0;r<rows;r++){
+        for(let col=0;col<cols;col++){
+          ctx.fillStyle = rng() < litChance ? litHex : unlitHex; // lit/unlit pick via the shared seeded rng(), never Math.random(), so the pattern stays reproducible
+          ctx.fillRect(col*cellPx+inset, r*cellPx+inset, cellPx-inset*2, cellPx-inset*2);
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.needsUpdate = true;
+      return tex;
+    }
+    // 4 archetype tones total, muted/desaturated brick-red / blue-glass / tan / mustard-yellow —
+    // kept inside this city's existing warm-neutral palette family rather than saturated, cartoonish colors
+    const slabTex = makeWindowGridTexture("#7f8f93", "#54646c", "#aebcc0", 3, 4, 0.35);    // ARCH_SLAB — muted blue-glass curtain wall
+    slabTex.repeat.set(3, 5);
+    const steppedTex = makeWindowGridTexture("#c2ac86", "#8a7458", "#f1ead9", 4, 3, 0.4);  // ARCH_STEPPED — muted tan mid-rise (unlit brown / warm-white lit, echoes the old CITY_WINDOW_BAND_TONE cream)
+    steppedTex.repeat.set(2, 2);
+    const shopTex = makeWindowGridTexture("#9c6455", "#5c4033", "#d9a86c", 4, 2, 0.45);    // ARCH_SHOP — muted brick red, warm amber lit windows
+    shopTex.repeat.set(2, 1);
+    const towerTex = makeWindowGridTexture("#b89a54", "#7a6636", "#e9d9a0", 2, 4, 0.35);   // ARCH_TOWER — muted mustard/ochre-yellow
+    towerTex.repeat.set(2, 3);
+
+    const slabBodyBatch = makeAccentBatch(unitBox, 0xffffff, {map:slabTex, roughness:0.55, emissive:0x36434a, emissiveIntensity:0.08});
+    const steppedBaseBodyBatch = makeAccentBatch(unitBox, 0xffffff, {map:steppedTex, roughness:0.8, emissive:0x36301f, emissiveIntensity:0.06});
+    // top tier of ARCH_STEPPED reuses the SAME steppedTex texture object (zero extra canvas draws) —
+    // only the material's own `color` differs, which multiplies the shared map, giving the tier a
+    // visibly different tone (the "tier break" the previous pass got from a second color batch)
+    // without needing a 5th canvas texture
+    const steppedTopBodyBatch = makeAccentBatch(unitBox, 0xdccfa8, {map:steppedTex, roughness:0.8, emissive:0x36301f, emissiveIntensity:0.06});
+    const shopBodyBatch = makeAccentBatch(unitBox, 0xffffff, {map:shopTex, roughness:0.85, emissive:0x3a2419, emissiveIntensity:0.06});
+    const towerBodyBatch = makeAccentBatch(unitBox, 0xffffff, {map:towerTex, roughness:0.8, emissive:0x33290f, emissiveIntensity:0.06});
+
+    const roofCapBatch = makeAccentBatch(unitBox, CITY_ROOF_TONE, {roughness:0.85});
+    const awningBatch = makeAccentBatch(unitBox, CITY_AWNING_TONE, {roughness:0.8});
+    const doorBatch = makeAccentBatch(unitBox, CITY_DOOR_TONE, {roughness:0.7});
+    const pitchRoofGeo = new THREE.ConeGeometry(1,1,4);
+    pitchRoofGeo.rotateY(Math.PI/4); // baked 45deg twist, same trick buildHouse()/buildSchool() use on their own ConeGeometry roofs, so the instance's own rotation.y still lines the roof up with its body footprint
+    const pitchRoofBatch = makeAccentBatch(pitchRoofGeo, CITY_PITCH_ROOF_TONE, {roughness:0.75});
 
     const roadSegCount = CITY_SECTORS*ROAD_ARC_SUBDIV*(CITY_LANES+1) /* ring roads */ + CITY_SECTORS*CITY_LANES /* spoke roads */;
-    const roadBatch = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(1,1,1),
-      new THREE.MeshStandardMaterial({color:ROAD_COLOR, flatShading:true, roughness:0.95}),
-      roadSegCount
-    );
+
+    /* ---- Part 2 of the texture pass: procedural road/sidewalk/crosswalk textures — 3 more canvas
+       textures (7 total for the whole city+roads system), each generated once and shared via its
+       batch's material.map (see the texture-pass doc comment above). ---- */
+    const ROAD_MARKING_TONE = 0xd9d3bd; // pale, muted marking tone carried over from the previous pass's stripe color
+
+    function makeRoadSurfaceTexture(){
+      // canvas x = along the road's length (u, repeats via texture.repeat.x below so the dash
+      // pattern continues down whatever segment length uses it); canvas y = across the road's
+      // width (v, never repeated — a segment's local z always spans exactly one ROAD_WIDTH)
+      const w = 256, h = 128;
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = toCss(ROAD_COLOR); ctx.fillRect(0,0,w,h);
+      ctx.fillStyle = toCss(ROAD_MARKING_TONE);
+      const edgeInset = h*0.08, edgeThick = h*0.05;
+      ctx.fillRect(0, edgeInset, w, edgeThick);                 // near edge line
+      ctx.fillRect(0, h-edgeInset-edgeThick, w, edgeThick);      // far edge line
+      const dashW = w*0.28, dashGap = w*0.22, dashThick = h*0.07, midY = h/2 - dashThick/2;
+      for(let dx=0; dx<w; dx+=dashW+dashGap){ ctx.fillRect(dx, midY, dashW, dashThick); } // dashed center line, tiles seamlessly at the canvas's own width
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(3, 1); // repeats along length only; approximate across ring-chord vs spoke segments' differing lengths — same shared-material tradeoff as the building textures above
+      tex.needsUpdate = true;
+      return tex;
+    }
+    const roadTex = makeRoadSurfaceTexture();
+    const roadBatch = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({color:0xffffff, map:roadTex, flatShading:true, roughness:0.95}), roadSegCount);
     roadBatch.castShadow = false; roadBatch.receiveShadow = true; // see shadow note above
     roadBatch.count = 0;
     scene.add(roadBatch);
 
+    function makePaverTexture(){
+      // same length-repeats-only convention as the road texture above; unlike the road/building
+      // textures, the width axis (v) here is exact — every sidewalk instance shares the same fixed
+      // SIDEWALK_WIDTH, so no per-instance approximation is needed on that axis
+      const w = 128, h = 64;
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#b7ae9c"; ctx.fillRect(0,0,w,h); // muted warm-gray paver base, lighter than the asphalt, still inside the family
+      ctx.strokeStyle = "#8f8879"; ctx.lineWidth = 2;
+      const brickW = w/4, brickH = h/2;
+      for(let row=0; row<2; row++){
+        const rowOffset = (row%2)*brickW/2; // running-bond offset every other row
+        for(let bx=-brickW; bx<w+brickW; bx+=brickW){
+          ctx.strokeRect(bx+rowOffset, row*brickH, brickW, brickH);
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(4, 1);
+      tex.needsUpdate = true;
+      return tex;
+    }
+    const paverTex = makePaverTexture();
+    const sidewalkBatch = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({color:0xffffff, map:paverTex, flatShading:true, roughness:0.9}), roadSegCount*2);
+    sidewalkBatch.castShadow = false; sidewalkBatch.receiveShadow = true; // see shadow note above
+    sidewalkBatch.count = 0;
+    scene.add(sidewalkBatch);
+
+    function makeCrosswalkTexture(){
+      // canvas x = across the road's width (u, uniform — every bar spans the full crossing width);
+      // canvas y = along the direction of travel (v) — bars alternate along this axis, baked
+      // directly at the crossing's actual short depth, so no repeat is needed
+      const w = 32, h = 128, bands = 4;
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = toCss(ROAD_COLOR); ctx.fillRect(0,0,w,h);
+      ctx.fillStyle = toCss(ROAD_MARKING_TONE);
+      const bandH = h/(bands*2);
+      for(let i=0;i<bands;i++){ ctx.fillRect(0, i*bandH*2, w, bandH); }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.needsUpdate = true;
+      return tex;
+    }
+    const crosswalkTex = makeCrosswalkTexture();
+    const crosswalkBatch = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({color:0xffffff, map:crosswalkTex, flatShading:true, roughness:0.85}), CITY_SECTORS);
+    crosswalkBatch.castShadow = false; crosswalkBatch.receiveShadow = true; // see shadow note above
+    crosswalkBatch.count = 0;
+    scene.add(crosswalkBatch);
+
     const dummy = new THREE.Object3D();
-    let colorCursor = 0;
+    const yAxis = new THREE.Vector3(0,1,0);
+    const off = new THREE.Vector3();
+    function rotatedOffset(rotY, lx, lz){ off.set(lx,0,lz).applyAxisAngle(yAxis, rotY); return off; } // rotates a local (x,0,z) offset by the same rotation.y a part is given, so wall-mounted accents (shop awning/door, sidewalk strips) land flush regardless of that instance's random/derived yaw
 
     /* ---- buildings: one small cluster per sector x lane block ---- */
     for(let s=0;s<CITY_SECTORS;s++){
@@ -1610,24 +1861,64 @@
           const w = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
           const d = CITY_MIN_WH + rng()*(CITY_MAX_WH-CITY_MIN_WH);
           const h = CITY_MIN_H + rng()*(CITY_MAX_H-CITY_MIN_H);
-          dummy.position.set(x, y + h/2, z);
-          dummy.rotation.set(0, rng()*Math.PI*2, 0);
-          dummy.scale.set(w, h, d);
-          dummy.updateMatrix();
-          const batch = buildingBatches[colorCursor % buildingBatches.length];
-          colorCursor++;
-          batch.setMatrixAt(batch.count, dummy.matrix);
-          batch.count++;
+          const rotY = rng()*Math.PI*2;
+          const archetype = Math.floor(rng()*ARCHETYPE_COUNT);
+
+          if(archetype === ARCH_SLAB){
+            // flat-roofed slab tower: box body (now wrapped in the slabTex window-grid texture), thin overhanging flat roof cap
+            const bodyH = h*0.93, capH = h*0.07; // cap stacks on the body so total height stays == h, in the same ballpark as before
+            dummy.position.set(x, y+bodyH/2, z); dummy.rotation.set(0,rotY,0); dummy.scale.set(w, bodyH, d); dummy.updateMatrix();
+            slabBodyBatch.setMatrixAt(slabBodyBatch.count++, dummy.matrix);
+            dummy.position.set(x, y+bodyH+capH/2, z); dummy.rotation.set(0,rotY,0); dummy.scale.set(w*1.08, capH, d*1.08); dummy.updateMatrix();
+            roofCapBatch.setMatrixAt(roofCapBatch.count++, dummy.matrix);
+            // (the old flat windowBandBatch accent strip is retired here — slabTex already textures the whole wall with windows)
+
+          } else if(archetype === ARCH_STEPPED){
+            // stepped mid-rise: wider base tier + narrower top tier flush on top of it, both wrapped in steppedTex (see steppedTopBodyBatch's material.color tint for the tier-break contrast)
+            const baseH = h*0.6, topH = h*0.4; // tiers sum to h, same ballpark as before
+            dummy.position.set(x, y+baseH/2, z); dummy.rotation.set(0,rotY,0); dummy.scale.set(w, baseH, d); dummy.updateMatrix();
+            steppedBaseBodyBatch.setMatrixAt(steppedBaseBodyBatch.count++, dummy.matrix);
+            dummy.position.set(x, y+baseH+topH/2, z); dummy.rotation.set(0,rotY,0); dummy.scale.set(w*0.62, topH, d*0.62); dummy.updateMatrix();
+            steppedTopBodyBatch.setMatrixAt(steppedTopBodyBatch.count++, dummy.matrix);
+
+          } else if(archetype === ARCH_SHOP){
+            // small shop-style low building: box body (shopTex brick-window texture), flat awning strip + door-colored inset riveted to one wall face
+            dummy.position.set(x, y+h/2, z); dummy.rotation.set(0,rotY,0); dummy.scale.set(w, h, d); dummy.updateMatrix();
+            shopBodyBatch.setMatrixAt(shopBodyBatch.count++, dummy.matrix);
+            let o = rotatedOffset(rotY, 0, d/2+0.05);
+            dummy.position.set(x+o.x, y+h*0.62, z+o.z); dummy.rotation.set(0,rotY,0); dummy.scale.set(w*0.85, h*0.09, 0.5); dummy.updateMatrix();
+            awningBatch.setMatrixAt(awningBatch.count++, dummy.matrix);
+            o = rotatedOffset(rotY, 0, d/2+0.03);
+            dummy.position.set(x+o.x, y+h*0.2, z+o.z); dummy.rotation.set(0,rotY,0); dummy.scale.set(w*0.26, h*0.4, 0.12); dummy.updateMatrix();
+            doorBatch.setMatrixAt(doorBatch.count++, dummy.matrix);
+
+          } else {
+            // small tower (ARCH_TOWER): narrower body (towerTex window texture), pitched pyramid roof — echoes the village houses'/school's own pitched-roof silhouette
+            const towerW = w*0.75, towerD = d*0.75, towerBodyH = h*0.7, roofH = h*0.3; // body+roof sum to h, same ballpark as before
+            dummy.position.set(x, y+towerBodyH/2, z); dummy.rotation.set(0,rotY,0); dummy.scale.set(towerW, towerBodyH, towerD); dummy.updateMatrix();
+            towerBodyBatch.setMatrixAt(towerBodyBatch.count++, dummy.matrix);
+            dummy.position.set(x, y+towerBodyH+roofH/2, z); dummy.rotation.set(0,rotY,0); dummy.scale.set(towerW*1.25, roofH, towerD*1.25); dummy.updateMatrix();
+            pitchRoofBatch.setMatrixAt(pitchRoofBatch.count++, dummy.matrix);
+            // (the old flat windowBandBatch accent strip is retired here — towerTex already textures the whole wall with windows)
+          }
         }
       }
     }
-    buildingBatches.forEach(b=>{ b.instanceMatrix.needsUpdate = true; });
+    [slabBodyBatch, steppedBaseBodyBatch, steppedTopBodyBatch, shopBodyBatch, towerBodyBatch, roofCapBatch, awningBatch, doorBatch, pitchRoofBatch].forEach(b=>{ b.instanceMatrix.needsUpdate = true; });
+    // 9 building InstancedMesh draw calls total (unchanged from the archetype pass): 5 textured body
+    // batches (one per archetype, plus ARCH_STEPPED's second tier) + 4 silhouette accents
+    // (roofCapBatch/awningBatch/doorBatch/pitchRoofBatch) — the retired windowBandBatch's slot was
+    // reused by the new steppedTopBodyBatch split, so the total count didn't grow.
 
-    /* ---- roads: one thin box per segment, individually height-sampled and
-       rotated to align with its own direction. For a box scaled along its
-       local +X axis, rotation.y = atan2(-dz,dx) aligns that local +X axis
-       with a world-space direction (dx,dz) — verified against the identity
-       cases (dx=1,dz=0 -> 0 rotation; dx=0,dz=1 -> -90deg rotation, which is
+    /* ---- roads: one thin box per segment (its asphalt+lane-marking texture
+       baked in — see makeRoadSurfaceTexture() above; the old separate
+       geometric center-line stripe box is retired now that the texture
+       bakes that detail in directly), plus a paver-textured sidewalk strip
+       on each side, individually height-sampled and rotated to align with
+       its own direction. For a box scaled along its local +X axis,
+       rotation.y = atan2(-dz,dx) aligns that local +X axis with a
+       world-space direction (dx,dz) — verified against the identity cases
+       (dx=1,dz=0 -> 0 rotation; dx=0,dz=1 -> -90deg rotation, which is
        exactly the world +Z direction). ---- */
     function placeRoadSegment(x0,z0,x1,z1){
       const mx=(x0+x1)/2, mz=(z0+z1)/2;
@@ -1642,6 +1933,19 @@
       dummy.updateMatrix();
       roadBatch.setMatrixAt(roadBatch.count, dummy.matrix);
       roadBatch.count++;
+      // sidewalk/curb strip on both sides, just outside this segment's own painted edge line — reuses
+      // the same rotatedOffset() helper the shop archetype's wall-mounted awning/door use above, since
+      // a local (0,0,±lateral) offset rotated by this segment's own rot lands exactly perpendicular to it
+      const sidewalkOffset = ROAD_WIDTH/2 + SIDEWALK_GAP + SIDEWALK_WIDTH/2;
+      [-1, 1].forEach(side=>{
+        const o = rotatedOffset(rot, 0, side*sidewalkOffset);
+        dummy.position.set(mx+o.x, my+SIDEWALK_Y_LIFT, mz+o.z);
+        dummy.rotation.set(0, rot, 0);
+        dummy.scale.set(len, SIDEWALK_THICK, SIDEWALK_WIDTH);
+        dummy.updateMatrix();
+        sidewalkBatch.setMatrixAt(sidewalkBatch.count, dummy.matrix);
+        sidewalkBatch.count++;
+      });
     }
     // concentric ring roads, one at every lane boundary (CITY_LANES+1 of them), each approximated as ROAD_ARC_SUBDIV short chords per sector
     for(let ring=0; ring<=CITY_LANES; ring++){
@@ -1662,7 +1966,33 @@
         placeRoadSegment(rStart*ct, rStart*st, rEnd*ct, rEnd*st);
       }
     }
+    // crosswalks: a fixed, practical subset of spoke/ring intersections rather than every one —
+    // one short zebra-striped strip per sector along the innermost ring only (CITY_SECTORS = 24
+    // total), where each spoke meets the ring closest to the village-facing side of the map
+    for(let s=0;s<CITY_SECTORS;s++){
+      const theta = s*sectorAngle;
+      const cx = CITY_INNER_R*Math.cos(theta), cz = CITY_INNER_R*Math.sin(theta);
+      const cy = heightAt(cx,cz);
+      // tangential direction (perpendicular to the spoke's own radial direction), so the crosswalk
+      // band spans ACROSS the ring road's width, with its short "stripe depth" axis pointing along
+      // the spoke's direction of travel
+      const tx = -Math.sin(theta), tz = Math.cos(theta);
+      const rot = Math.atan2(-tz, tx);
+      dummy.position.set(cx, cy+CROSSWALK_Y_LIFT, cz);
+      dummy.rotation.set(0, rot, 0);
+      dummy.scale.set(ROAD_WIDTH*0.92, ROAD_THICK*0.6, CROSSWALK_DEPTH);
+      dummy.updateMatrix();
+      crosswalkBatch.setMatrixAt(crosswalkBatch.count, dummy.matrix);
+      crosswalkBatch.count++;
+    }
     roadBatch.instanceMatrix.needsUpdate = true;
+    sidewalkBatch.instanceMatrix.needsUpdate = true;
+    crosswalkBatch.instanceMatrix.needsUpdate = true;
+    // 3 road-family InstancedMesh draw calls total (roadBatch/sidewalkBatch/crosswalkBatch) — one
+    // more than the 2 the previous pass had (roadBatch/roadLineBatch), since the retired
+    // roadLineBatch's texture-baked replacement is "free" (no batch of its own) while sidewalks and
+    // crosswalks are genuinely new geometry categories, each still just ONE shared InstancedMesh
+    // batch no matter how many road segments or intersections exist.
   })();
 
   /* ================= LIVE BACKEND DATA, CLICK PANEL, KPI GRID ================= */
