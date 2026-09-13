@@ -237,6 +237,27 @@
   .kpi-card .kpi-status.unknown{color:#a8874f;}
   .kpi-card .kpi-counts{display:block;font-size:11.5px;color:var(--ink-dim);}
   .kpi-card .kpi-sources{display:block;font-size:11px;color:var(--ink-dim);margin-top:2px;}
+  /* "demo data" badge — shown next to the KPI heading only while the
+     simulated/offline fallback data source is active (see startSimulation()/
+     stopSimulation() near the LIVE BACKEND DATA section of the script below).
+     Reuses the same amber tone already used for .kpi-status.unknown, plus the
+     rounded-pill look of .modelstatus/.resetbtn, so it reads as part of the
+     same visual language rather than a new one-off style. */
+  .demo-badge{
+    display:inline-flex;
+    align-items:center;
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+    color:#a8874f;
+    background:rgba(168,135,79,0.12);
+    border:1px solid rgba(168,135,79,0.35);
+    border-radius:999px;
+    padding:2px 9px;
+    white-space:nowrap;
+  }
+  .demo-badge[hidden]{display:none;}
   @media (max-width:480px){
     .sitepanel{width:auto;left:14px;right:14px;max-width:none;}
   }
@@ -263,7 +284,7 @@
   <h1>One core, six agents, each with its own unit stationed outside</h1>
   <p>A bigger low-poly campus: the command house at the center, six agent buildings ringed around it on their own paths, and a robot stationed by each — every one a live WebGL scene you can orbit and zoom.</p>
   <ul class="legend" id="legend"></ul>
-  <p class="eyebrow" id="kpiEyebrow">Live agent activity</p>
+  <p class="eyebrow" id="kpiEyebrow">Live agent activity <span class="demo-badge" id="demoBadge" hidden>Demo data</span></p>
   <p class="backendmeta" id="backendmeta" aria-live="polite">Connecting to live agent data…</p>
   <div class="kpi-grid" id="kpigrid"></div>
 </div>
@@ -2484,6 +2505,157 @@
     closeSitePanel();
   });
 
+  /* ================= SIMULATED / DEMO AGENT ACTIVITY (fallback only) =================
+     SIMULATED DATA — NOT real agent activity. Pure client-side, no network
+     calls whatsoever. This block only ever drives the scene/KPI grid/click
+     panel when the real backend at BACKEND_BASE is unreachable (see
+     startSimulation()/stopSimulation() and their call sites inside
+     applyAgentPayload()/onBackendUnreachable() below) — e.g. when this page
+     is deployed as a static site with no backend running. Whenever a real
+     backend IS reachable, applyAgentPayload() immediately stops this
+     simulator and the real payload takes over, unchanged from before.
+
+     The payload this builds (buildSimPayload()) matches the exact shape the
+     real backend sends — per-type `total`/`active`/`recent`/`requests[]`
+     (each `requestText`/`responseText`) inside `agentTypes[]`, plus an
+     `agents[]` list — and is handed to the SAME applyBusyToScene()/
+     renderKPI()/renderSitePanel() pipeline the real data uses via
+     applySimulatedPayload() below, so the busy-indicator styling (whichever
+     EFFECTIVE_BUSY_STYLE is active) and the click-panel rendering need no
+     changes at all to consume it. */
+  const SIM_AGENT_TYPES = ["auditor","backend-dotnet","chat","frontend-ux-ui","orchestrator","sql","tester"];
+  /* ~3-5 short, clearly generic/placeholder dev-task snippets per agent type —
+     never real user/company data. Picked at random whenever that type starts
+     a new simulated busy period (see simStartBusyPeriod() below). */
+  const SIM_SNIPPETS = {
+    "auditor": [
+      {requestText:"review the last deploy for any risky permission changes", responseText:"Scanned the diff for role/ACL edits — flagged one endpoint that dropped an auth check and opened a ticket for it."},
+      {requestText:"double-check the changelog matches what actually shipped", responseText:"Cross-referenced the changelog against the merged PR list and added two entries that were missing."},
+      {requestText:"audit error logging coverage on the payments module", responseText:"Found three catch blocks swallowing exceptions silently and added structured logging to each."},
+      {requestText:"verify the new feature flag defaults are safe", responseText:"Confirmed the flag defaults to off in production config and added a note to the rollout doc."}
+    ],
+    "backend-dotnet": [
+      {requestText:"investigate the slow /api/orders endpoint", responseText:"Traced it to an N+1 query in the order-items loader and switched it to a single batched query."},
+      {requestText:"add retry logic around the external pricing call", responseText:"Wrapped the HTTP client call with a 3-attempt exponential backoff and a circuit breaker."},
+      {requestText:"fix the null reference in the checkout service", responseText:"Added a null guard around the missing cart-session case, plus a regression test."},
+      {requestText:"wire up a background job for stale sessions", responseText:"Added a hosted service that sweeps expired sessions every 10 minutes."}
+    ],
+    "chat": [
+      {requestText:"summarize this thread for the standup notes", responseText:"Condensed the discussion into three bullet points covering decision, owner, and next step."},
+      {requestText:"draft a friendlier version of this error message", responseText:"Rewrote it to explain what happened and what the user can do next, without jargon."},
+      {requestText:"help me phrase this update for the team channel", responseText:"Drafted a short status update highlighting what shipped and what's next."},
+      {requestText:"explain this stack trace in plain language", responseText:"It's a timeout waiting on the database connection pool — likely too few pooled connections under load."}
+    ],
+    "frontend-ux-ui": [
+      {requestText:"tighten spacing on the dashboard cards", responseText:"Reduced card padding and adjusted the grid gap so more cards fit above the fold."},
+      {requestText:"improve keyboard focus order on the settings page", responseText:"Reordered the tab sequence to follow the visual layout and added visible focus outlines."},
+      {requestText:"make the modal usable on small screens", responseText:"Switched the modal to a full-height sheet under 480px and enlarged the tap targets."},
+      {requestText:"check color contrast on the status badges", responseText:"Darkened the amber badge text to meet WCAG AA against its background."}
+    ],
+    "orchestrator": [
+      {requestText:"coordinate the release across the backend and frontend agents", responseText:"Sequenced the backend deploy first, then triggered the frontend build once health checks passed."},
+      {requestText:"figure out which agent should own this bug", responseText:"Routed it to backend-dotnet based on the stack trace, with auditor looped in for the permissions angle."},
+      {requestText:"plan the steps for this feature request", responseText:"Broke it into a schema change, an API update, and a UI pass, and queued them in that order."},
+      {requestText:"reconcile conflicting recommendations from two agents", responseText:"Picked the tester's regression concern as the blocking one and deferred the style suggestion to a follow-up."}
+    ],
+    "sql": [
+      {requestText:"check index usage on the orders table", responseText:"Added a covering index on (customer_id, created_at); the query plan no longer shows a table scan."},
+      {requestText:"find out why the report query is slow", responseText:"Rewrote a correlated subquery as a join, cutting the query plan cost significantly."},
+      {requestText:"clean up duplicate rows in the staging import", responseText:"Wrote a dedupe query keyed on (order_id, line_no) and verified row counts before/after."},
+      {requestText:"review the new migration for locking risk", responseText:"Flagged an ALTER TABLE that would lock the table and suggested an online schema change instead."}
+    ],
+    "tester": [
+      {requestText:"add regression coverage for the checkout fix", responseText:"Added two test cases covering the missing cart-session path and the happy path."},
+      {requestText:"figure out why this test is flaky", responseText:"The test raced against an async callback; added a proper wait condition instead of a fixed sleep."},
+      {requestText:"run through the new signup flow for edge cases", responseText:"Found that an empty invite code silently passed validation and filed a bug with repro steps."},
+      {requestText:"verify the API still returns the old response shape", responseText:"Confirmed backward compatibility with a contract test against the previous schema."}
+    ]
+  };
+  const demoBadgeEl = document.getElementById("demoBadge");
+  let simulationActive = false; // the toggle-loop (simScheduleNext) is running
+  let simState = null;          // per-agentType: {busyUntil, total, requests[], lastActivityAt}
+  let simTimer = null;          // pending setTimeout id for the next busy/idle toggle roll
+
+  function simRandRange(min, max){ return min + Math.random()*(max-min); }
+  function initSimState(){
+    simState = {};
+    SIM_AGENT_TYPES.forEach(type=>{
+      simState[type] = {busyUntil:0, total:0, requests:[], lastActivityAt:null};
+    });
+  }
+  function simStartBusyPeriod(type){
+    const st = simState[type];
+    const now = Date.now();
+    const pool = SIM_SNIPPETS[type] || [];
+    if(pool.length){
+      const pick = pool[Math.floor(Math.random()*pool.length)];
+      st.requests.unshift({requestText:pick.requestText, responseText:pick.responseText, respondedAt:new Date(now).toISOString()});
+      st.requests.length = Math.min(st.requests.length, 5); // keep the panel list short, like a real recent-activity feed
+    }
+    st.total += 1;
+    st.lastActivityAt = new Date(now).toISOString();
+    st.busyUntil = now + simRandRange(10,30)*1000; // 10-30s "busy" duration per spec
+  }
+  /* every 5-15s (randomized — determinism is deliberately not required here,
+     unlike the terrain/city generation elsewhere in this file), toggle 0-2
+     random agent types into a busy state. Idle transitions need no timer of
+     their own: buildSimPayload() below simply compares Date.now() against
+     each type's busyUntil on every render. */
+  function simScheduleNext(){
+    simTimer = setTimeout(()=>{
+      const howMany = Math.floor(Math.random()*3); // 0, 1, or 2
+      const pool = SIM_AGENT_TYPES.slice();
+      for(let n=0; n<howMany && pool.length; n++){
+        const idx = Math.floor(Math.random()*pool.length);
+        simStartBusyPeriod(pool.splice(idx,1)[0]);
+      }
+      if(howMany > 0 && simulationActive) applySimulatedPayload(buildSimPayload());
+      if(simulationActive) simScheduleNext();
+    }, simRandRange(5,15)*1000);
+  }
+  function buildSimPayload(){
+    const now = Date.now();
+    const agentTypes = SIM_AGENT_TYPES.map(type=>{
+      const st = simState[type];
+      const busyNow = now < st.busyUntil;
+      const recent = st.requests.filter(r=> (now - new Date(r.respondedAt).getTime()) < RECENT_WINDOW_MS).length;
+      return {agentType:type, total:st.total, active:busyNow?1:0, recent, requests:st.requests.slice()};
+    });
+    const agents = SIM_AGENT_TYPES.filter(type=>simState[type].total>0).map(type=>{
+      const st = simState[type];
+      const busyNow = now < st.busyUntil;
+      return {agentType:type, status: busyNow ? "running_tool" : "idle", lastActivityAt:st.lastActivityAt, source:{client:"demo"}};
+    });
+    return {generatedAt:new Date(now).toISOString(), agentTypes, agents};
+  }
+  /* renders exactly like applyAgentPayload() below (same downstream
+     functions, same data shape) but is clearly labeled as demo data in the
+     status line + KPI badge instead of "Live · updated …". */
+  function applySimulatedPayload(payload){
+    lastPayload = payload;
+    backendReachable = true; // there's a payload to render; see buildSimPayload()'s doc comment above
+    if(backendMetaEl) backendMetaEl.textContent = "Demo data · no live backend — showing simulated agent activity.";
+    if(demoBadgeEl) demoBadgeEl.hidden = false;
+    applyBusyToScene();
+    renderKPI();
+    if(currentPanelType) renderSitePanel();
+  }
+  function startSimulation(){
+    if(!simState) initSimState();
+    if(demoBadgeEl) demoBadgeEl.hidden = false;
+    if(!simulationActive){
+      simulationActive = true;
+      simScheduleNext();
+    }
+    applySimulatedPayload(buildSimPayload()); // paint current state immediately (also re-asserts the demo status text/badge on every repeat call from onBackendUnreachable())
+  }
+  function stopSimulation(){
+    if(!simulationActive) return;
+    simulationActive = false;
+    if(simTimer){ clearTimeout(simTimer); simTimer = null; }
+    if(demoBadgeEl) demoBadgeEl.hidden = true;
+  }
+
   /* ---------- backend connection ----------
      EventSource is used as the primary transport: GET /api/stream was
      confirmed live during development (a manual `curl -D-` against it
@@ -2515,6 +2687,7 @@
     pollTimer = setInterval(poll, 4000);
   }
   function applyAgentPayload(payload){
+    stopSimulation(); // real data just arrived — the real path always wins over the simulated fallback
     lastPayload = payload;
     backendReachable = true;
     if(backendMetaEl) backendMetaEl.textContent = "Live · updated " + relativeTime(payload.generatedAt);
@@ -2524,14 +2697,14 @@
   }
   function onBackendUnreachable(){
     backendReachable = false;
-    if(backendMetaEl){
-      backendMetaEl.textContent = lastPayload
-        ? "Offline — showing last known data from " + relativeTime(lastPayload.generatedAt)
-        : "Offline — no agent data available.";
-    }
-    applyBusyToScene();
-    renderKPI();
-    if(currentPanelType) renderSitePanel();
+    /* no real backend this session (or it just dropped) — fall back to the
+       client-side simulator (see startSimulation() above) instead of a bare
+       offline/idle state, so the KPI grid, busy-indicator, and click panel
+       still have something to show. startSimulation() re-asserts its own
+       "Demo data · …" status text + badge each time this fires, which is
+       fine since it's cheap and idempotent (it repeats on every failed poll,
+       see startPolling() below). */
+    startSimulation();
   }
   if(typeof EventSource === "undefined"){
     startPolling();
